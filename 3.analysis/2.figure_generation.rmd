@@ -1,0 +1,2755 @@
+---
+title: "2.figure_generation"
+author: "Elias Oziolor"
+date: '2022-09-07'
+output: html_document
+---
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+#setwd("path/Desktop/projects/CompTox_insertmuta_DNA/")
+library(GenomicRanges)
+library(GenomicFeatures)
+library(GenomicAlignments)
+library(ggbio)
+library(ORFik)
+library(tidyverse)
+library(exomeCopy)
+library(RMariaDB)
+library(pool)
+library(data.table)
+library(DOSE)
+library(knitr)
+library(stringr)
+library(circlize)
+library(RColorBrewer)
+
+zoomapcon<- dbPool(
+  RMariaDB::MariaDB(),
+  dbname = "dbname",
+  host = 'host',
+  username = 'user',
+  password = 'pass'
+)
+
+```
+
+#	Load metadata
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+meta.mouse<-read_csv("../data/meta/mouse_meta_post.csv")
+meta.cyno<-read_csv("../data/meta/cyno_meta_post.csv")
+meta.human<-read_csv("../data/meta/human_meta_post.csv")
+```
+
+# Loading IS (just once)
+
+```{r}
+# data_dir <- "/hpc/grid/dsrd-invtox/workspace/oziole/CompTox_insertmuta_DNA/data/"
+# data_dir <- "/hpc/grid/dsrd-invtox/workspace/oziole/CompTox_insertmuta_DNA/data/paper.reanalysis/"
+# 
+# # WG
+# proj <- "cyno_wg"
+# 
+# loadIS(meta = meta.cyno,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+# 
+# TES
+## cyno tes
+# proj <- "cyno_tes"
+# loadIS(meta = meta.cyno,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+# 
+# # TES
+# 
+# ## mouse tes
+# proj <- "mouse_tes"
+# loadIS(meta = meta.mouse,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+#
+# # TES FFPE
+# proj <- "cyno_tes_ffpe"
+# 
+# loadIS(meta = meta,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE, 
+#        do.read.info = TRUE)
+# 
+# S-EPTS
+## cyno septs
+# proj <- "cyno_septs"
+# loadIS(meta = meta.cyno,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+# 
+# ## mouse septs
+# proj <- "mouse_septs"
+# loadIS(meta = meta.mouse,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+# 
+## mouse wg
+# proj <- "mouse_wg"
+# loadIS(meta = meta.mouse,
+#        base.dir = paste0(data_dir, "/", proj, "/"),
+#        pattern.is = "sorted.bam$",
+#        set = proj,
+#        do.is = FALSE,
+#        do.vir.origin = FALSE,
+#        do.read.info = TRUE)
+# LOAD HTH WITH LOADIS-HTH.R BECAUSE OF OLDER RUN
+
+```
+
+# Host read names
+
+```{r}
+# Extracting read names for cyno and mouse host insertions to restrict to only those
+# Cyno section
+cyno.tes<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% 
+  mutate(group_name = "TES")
+cyno.tes.ffpe<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds")  %>%
+  mutate(group_name = "TES_FFPE")
+cyno.septs<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>%
+  mutate(group_name = "WG")
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes),
+            as.data.frame(cyno.tes.ffpe),
+            as.data.frame(cyno.septs),
+            as.data.frame(cyno.wg))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Keep read names
+keep.read.cyno <- cyno %>% filter(source == "host") %>% pull(read) %>% unique()
+
+# Extracting read names for mouse and mouse host insertions to restrict to only those
+# mouse section
+mouse.tes<-readRDS("../data/mouse_tes/mouse_tes_read.rds") %>% 
+  mutate(group_name = "TES")
+mouse.septs<-readRDS("../data/mouse_septs/mouse_septs_read.rds") %>%
+  mutate(group_name = "S-EPTS")
+mouse.wg<-readRDS("../data/mouse_wg/mouse_wg_read.rds") %>%
+  mutate(group_name = "WG")
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.tes),
+            as.data.frame(mouse.septs),
+            as.data.frame(mouse.wg))
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Keep read names
+keep.read.mouse <- mouse %>% filter(source == "host") %>% pull(read) %>% unique()
+
+```
+
+## Exploring loss from transgene masking
+
+```{r}
+#########################################################################
+# Cyno section
+#########################################################################
+# Host
+cyno.wg<-readRDS("../data/paper.reanalysis/cyno_wg/cyno_wg_read.rds") %>% 
+  mutate(group_name = "WG")
+cyno.tes<-readRDS("../data/paper.reanalysis/cyno_tes/cyno_tes_read.rds") %>% 
+  mutate(group_name = "TES")
+cyno.septs<-readRDS("../data//paper.reanalysis/cyno_septs/cyno_septs_read.rds") %>%
+  mutate(group_name = "S-EPTS")
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.wg),
+            as.data.frame(cyno.tes),
+            as.data.frame(cyno.septs))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Keep read names
+keep.read.cyno <- cyno %>% filter(source == "host") %>% pull(read) %>% unique()
+
+# Merging cyno
+cyno.vir<-rbind(cyno %>% filter(source == "virus") %>% 
+                  filter(read %in% keep.read.cyno))
+
+cyno.vir$sample_id<-as.numeric(cyno.vir$sample_id)
+
+# Adding metadata
+cyno.vir <- cyno.vir %>%
+  left_join(meta.cyno, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(cyno.vir %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+cyno.vir$dose_group<-factor(cyno.vir$dose_group,levels = c("ctrl","low","high"))
+
+# Plotting
+ggplot(cyno.vir,
+       aes(x = fct_infreq(chromosome), fill = dose_group))+
+  geom_bar()+
+  facet_grid(group_name ~ tissue)+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.1, hjust = 1))
+
+#########################################################################
+# Mouse section
+#########################################################################
+# Host
+mouse.wg<-readRDS("../data/paper.reanalysis/mouse_wg/mouse_wg_read.rds") %>% 
+  mutate(group_name = "WG")
+mouse.tes<-readRDS("../data/paper.reanalysis/mouse_tes/mouse_tes_read.rds") %>% 
+  mutate(group_name = "TES")
+mouse.septs<-readRDS("../data//paper.reanalysis/mouse_septs/mouse_septs_read.rds") %>%
+  mutate(group_name = "S-EPTS")
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.wg),
+             as.data.frame(mouse.tes),
+             as.data.frame(mouse.septs))
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Keep read names
+keep.read.mouse <- mouse %>% filter(source == "host") %>% pull(read) %>% unique()
+
+# Merging mouse
+mouse.vir<-rbind(mouse %>% filter(source == "virus") %>% 
+                  filter(read %in% keep.read.mouse))
+
+mouse.vir$sample_id<-as.numeric(mouse.vir$sample_id)
+
+# Adding metadata
+mouse.vir <- mouse.vir %>%
+  left_join(meta.mouse, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(mouse.vir %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+mouse.vir$dose_group<-factor(mouse.vir$dose_group,levels = c("ctrl","low","high"))
+
+# Plotting
+ggplot(mouse.vir,
+       aes(x = fct_infreq(chromosome), fill = dose_group))+
+  geom_bar()+
+  facet_grid(group_name ~ tissue)+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.1, hjust = 1))
+
+#########################################################################
+# Merging
+#########################################################################
+
+# Binding
+cyno.vir$species <- "cyno"
+mouse.vir$species <- "mouse"
+
+vir <- rbind(cyno.vir, mouse.vir)
+
+# Renaming elements
+vir$chromosome <- gsub("pxx680\\_kanr\\_","",vir$chromosome)
+vir$chromosome <- gsub("gsk29\\_kanr\\_","",vir$chromosome)
+
+
+# Summarise
+vir.sum <- vir %>%
+  filter(group_name %in% c("WG","TES")) %>% 
+  #filter(!chromosome %in% c("gsk29_kanr_repcap","pxx680_kanr_helper")) %>% 
+  group_by(group_name, chromosome, dose_group, tissue, sample_id, species) %>% 
+  transmute(origin.count = n()) %>% 
+  unique() %>% 
+  #ungroup() %>% 
+  #group_by(sample_id, group_name) %>% 
+  #mutate(tot.reads = sum(origin.count)) %>%
+  spread(chromosome, origin.count,fill = 0) %>% 
+  arrange(group_name, species, tissue, dose_group) %>% 
+  ungroup() %>% 
+  mutate(sample_id = as.character(sample_id)) %>% 
+  group_by(sample_id, tissue, group_name) %>% 
+  mutate(tot = rowSums(across(where(is.numeric)))) %>% 
+  select(group_name, species, tissue, dose_group, sample_id, everything())
+
+vir.sum
+write.csv(vir.sum, "../data/paper.reanalysis/TableS4.csv")
+```
+
+# Fig 2A
+# Viral origins from insert only
+
+```{r}
+# Cyno section
+cyno.tes<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "TES")
+cyno.tes.ffpe<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "TES_FFPE")
+cyno.septs<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "WG")
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes),
+            as.data.frame(cyno.tes.ffpe),
+            as.data.frame(cyno.septs),
+            as.data.frame(cyno.wg)) %>% filter(read %in% keep.read.cyno)
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(cyno %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+cyno$dose_group<-factor(cyno$dose_group,levels = c("ctrl","low","high"))
+
+# Viz
+## Scientific label funciton
+scientific_10 <- function(x) {
+  parse(text=gsub("e", " %*% 10^", scales::scientific_format()(x)))
+}
+
+# Fig 2A1
+p.fig2a1 <- ggplot(cyno %>% dplyr::filter(group_name !="TES_FFPE"),
+       aes(x=start, fill = dose_group))+
+  geom_histogram()+
+  facet_grid(group_name~tissue)+#,
+             #scales = "free_y")+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 10),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12),
+        axis.title = element_text(size = 20))+
+  xlab("Viral vector")+
+  ylab("Number of insertions")+
+  labs(fill = "Dose groups")
+
+p.fig2a1
+
+tiff("../extras/for_paper/fig2a1.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+p.fig2a1
+graphics.off()
+
+# Fig2a1 + FFPE
+ggplot(cyno,
+       aes(x=start, fill = dose_group))+
+  geom_histogram()+
+  facet_grid(group_name~tissue,
+             scales = "free_y")+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 10),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12),
+        axis.title = element_text(size = 20))+
+  xlab("Host chromosome")+
+  ylab("Number of insertions")+
+  labs(fill = "Dose groups")
+
+# Mouse section
+mouse.tes<-readRDS("../data/mouse_tes/mouse_tes_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "TES")
+mouse.septs<-readRDS("../data/mouse_septs/mouse_septs_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "S-EPTS")
+mouse.wg<-readRDS("../data/mouse_wg/mouse_wg_read.rds") %>% filter(source == "virus") %>%
+  mutate(group_name = "WG")
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.tes),
+            as.data.frame(mouse.septs),
+            as.data.frame(mouse.wg)) %>% filter(read %in% keep.read.mouse)
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Adding metadata
+mouse <- mouse %>%
+  left_join(meta.mouse, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(mouse %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+mouse$dose_group<-factor(mouse$dose_group,levels = c("ctrl","low","high"))
+
+# Viz
+p.figS3a <- ggplot(mouse %>% dplyr::filter(tissue == "liver" & group_name !="TES_FFPE"),
+       aes(x=start, fill = dose_group))+
+  geom_histogram()+
+  facet_grid(group_name~tissue,
+             scales = "free_y")+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 10),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12),
+        axis.title = element_text(size = 20))+
+  xlab("Viral vector")+
+  ylab("Number of insertions")+
+  labs(fill = "Dose groups")
+
+p.figS3a
+
+tiff("../extras/for_paper/figS3a.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+p.figS3a
+graphics.off()
+```
+# Fig 2A + 3
+# All IS + Chromosomal location
+
+```{r}
+# Cyno section
+cyno.tes.host<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% cyno.tes$read)
+cyno.tes.ffpe.host<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES_FFPE")%>% filter(read %in% cyno.tes.ffpe$read)
+cyno.septs.host<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg.host<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% cyno.wg$read)
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes.host),
+            as.data.frame(cyno.tes.ffpe.host),
+            as.data.frame(cyno.septs.host),
+            as.data.frame(cyno.wg.host))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(cyno %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+cyno$dose_group<-factor(cyno$dose_group,levels = c("ctrl","low","high"))
+cyno$chromosome <- factor(cyno$chromosome, levels = c(seq(1:20),"X","Y"))
+cyno$species <- "cyno"
+
+# Host origins
+p.fig2a2 <- ggplot(cyno %>% 
+         dplyr::filter(group_name !="TES_FFPE") %>% 
+         filter(source == "host") %>% 
+         filter(chromosome %in% c(seq(1:20),"X","Y")),
+       aes(x=as.factor(chromosome), fill = dose_group))+
+  geom_bar(stat = "count")+
+  facet_grid(group_name~tissue)+#,
+             #scales = "free_y")+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 10),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12),
+        axis.title = element_text(size = 20))+
+  xlab("Host chromosome")+
+  ylab("Number of insertions")+
+  labs(fill = "Dose groups")
+
+p.fig2a2
+
+tiff("../extras/for_paper/fig2a2.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+p.fig2a2
+graphics.off()
+
+
+# Test for normal over-representation
+cyno.dat <- cyno %>% 
+  dplyr::filter(group_name !="TES_FFPE") %>% 
+  filter(source == "host") %>% 
+  filter(chromosome %in% c(seq(1:20),"X")) %>% 
+  filter(chromosome != "Y") %>% 
+  select(group_name, chromosome, dose_group, tissue) %>% 
+  table() %>% as.data.frame() %>% 
+  filter(chromosome !="Y")
+
+cyno.ctr <- cyno.dat %>% filter(dose_group == "ctrl") %>% select(group_name, chromosome, tissue, fp = Freq)
+cyno.dose <- cyno.dat %>% filter(dose_group != "ctrl")
+
+cyno.subt <- cyno.dose %>% 
+  left_join(cyno.ctr, by = c("group_name","chromosome","tissue")) %>% 
+  mutate(freq.ctr = ifelse(Freq-fp<0, 0, Freq-fp)) %>% 
+  group_by(group_name,dose_group,tissue) %>% 
+  mutate(tot.insert = sum(freq.ctr)) %>% 
+  ungroup() %>% 
+  mutate(prop.insert = freq.ctr/tot.insert)
+
+## empty chromosome
+cyno.band<-as.data.frame(data.table(chromosome=c(1,10,11,12,13,14,15,16,17,18,19,2,20,3,4,5,6,7,8,9,"X"),
+                      length =c(227556264, 96509753, 137757926, 132586672, 111193037, 130733371,
+                                   112612857, 80997621, 96864807, 75711847, 59248254, 192460366,
+                                   78541002, 192294377, 170955103, 189454096, 181584905, 171882078,
+                                   146850525, 133195287, 152835861))) 
+
+cyno.band<-cyno.band %>% 
+  arrange(as.numeric(chromosome)) %>% 
+  mutate(prop.length = length/sum(cyno.band$length)) %>% 
+  select(-length)
+
+# Merging
+cyno.subt <- cyno.subt %>% 
+  left_join(cyno.band, by = "chromosome")
+
+# S-EPTS
+chisq.test(x = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "low" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "low" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "high" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "high" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "low" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "low" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "high" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "S-EPTS" & dose_group == "high" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+
+# TES
+chisq.test(x = cyno.subt %>% filter(group_name == "TES" & dose_group == "low" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "TES" & dose_group == "low" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "TES" & dose_group == "high" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "TES" & dose_group == "high" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "TES" & dose_group == "low" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "TES" & dose_group == "low" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "TES" & dose_group == "high" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "TES" & dose_group == "high" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+
+# WG
+chisq.test(x = cyno.subt %>% filter(group_name == "WG" & dose_group == "low" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "WG" & dose_group == "low" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "WG" & dose_group == "high" & tissue == "heart") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "WG" & dose_group == "high" & tissue == "heart") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "WG" & dose_group == "low" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "WG" & dose_group == "low" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+chisq.test(x = cyno.subt %>% filter(group_name == "WG" & dose_group == "high" & tissue == "liver") %>% pull(prop.insert),
+           p = cyno.subt %>% filter(group_name == "WG" & dose_group == "high" & tissue == "liver") %>% pull(prop.length), correct=FALSE, simulate.p.value = TRUE)
+
+write.csv(cyno.subt, "../data/cyno.is.freq.csv", row.names = FALSE)
+
+#################################################################
+# Mouse section
+mouse.tes.host<-readRDS("../data/mouse_tes/mouse_tes_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% mouse.tes$read)
+mouse.septs.host<-readRDS("../data/mouse_septs/mouse_septs_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+mouse.wg.host<-readRDS("../data/mouse_wg/mouse_wg_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% mouse.wg$read)
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.tes.host),
+            as.data.frame(mouse.septs.host),
+            as.data.frame(mouse.wg.host))
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Adding metadata
+mouse <- mouse %>%
+  left_join(meta.mouse, by = "sample_id")
+
+# Creating values for labeler
+clab<-unique(mouse %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+mouse$dose_group<-factor(mouse$dose_group,levels = c("ctrl","low","high"))
+mouse$chromosome <- factor(mouse$chromosome, levels = c(seq(1:20),"X","Y"))
+mouse$species <- "mouse"
+
+all.is <- rbind(
+  cyno %>% group_by(species,group_name,sample_id,dose_group,tissue) %>% transmute(c=n()) %>% unique(),
+  mouse %>% group_by(species,group_name,sample_id,dose_group,tissue) %>% transmute(c=n()) %>% unique()
+)
+
+# Plotting
+p.is.all <- ggplot(all.is %>% filter(group_name != "TES_FFPE"),
+       aes(x=reorder(dose_group, c, FUN = median),
+           y = c, color = dose_group))+
+  #geom_boxplot()+
+  geom_jitter(width = 0.2, aes(shape = tissue), size = 4)+
+  theme_bw()+
+  scale_y_log10(limits = c(1,5000))+
+  facet_grid(species+tissue~group_name)+
+  scale_color_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  ylab("Number of insertions")+
+  xlab("Dose groups")+
+  labs(color = "Dose groups",
+       shape = "Tissue")
+
+p.is.all
+
+tiff("../extras/for_paper/fig3.tiff", units="px", width=2000, height=1200, res=300, compression = 'lzw')
+p.is.all
+graphics.off()
+
+# Mouse FigS3b
+# Host origins
+p.figS3b <- ggplot(mouse %>% 
+         dplyr::filter(group_name !="TES_FFPE") %>% 
+         filter(source == "host") %>% 
+         filter(chromosome %in% c(seq(1:20),"X","Y")),
+       aes(x=as.factor(chromosome), fill = dose_group))+
+  geom_bar(stat = "count")+
+  facet_grid(group_name~.)+#,
+             #scales = "free_y")+
+  scale_fill_manual(values=c("grey70","darkgoldenrod2","chocolate"))+
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x)))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7),
+        axis.text.y = element_text(size = 10),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12),
+        axis.title = element_text(size = 20))+
+  xlab("Host chromosome")+
+  ylab("Number of insertions")+
+  labs(fill = "Dose groups")
+
+p.figS3b
+
+tiff("../extras/for_paper/figS3b.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+p.figS3b
+graphics.off()
+
+```
+
+# Fig 2B
+# TES: Creating circos from ranges of chr
+
+```{r}
+### Step 1
+# Creating a joint cytoband (sectors and index for plot)
+cyno.band<-as.data.frame(data.table(chrom=c(1,10,11,12,13,14,15,16,17,18,19,2,20,3,4,5,6,7,8,9,"X"),
+                      start = rep(0,21),
+                      end =c(227556264, 96509753, 137757926, 132586672, 111193037, 130733371,
+                                   112612857, 80997621, 96864807, 75711847, 59248254, 192460366,
+                                   78541002, 192294377, 170955103, 189454096, 181584905, 171882078,
+                                   146850525, 133195287, 152835861))) %>% 
+  arrange(as.numeric(chrom)) %>%
+  mutate(chrom = paste0("chr_",chrom))
+
+# Creating object for aav
+# aav.band<-as.data.frame(fread("../data/aav.no.fxn.hardmask.txt")) %>%
+#   select(-seqlength, chrom = seqnames) %>%
+#   mutate(chrom = paste0("chr_",chrom))
+
+aav.band <- as.data.frame(data.table(chrom = c("chr_itr_5pr","chr_cmv_enhancer","chr_chicken_beta_actin",
+                                               "chr_chimeric_intron","chr_sv40_poly_a","chr_itr_3pr"),
+                                     start = c(1,153,534,757,1835,2053),
+                                     end = c(153,534,757,1835,2053,2194)))
+
+# Comb band
+cytoband <- rbind(cyno.band, aav.band)
+
+chromosome.index = c(unique(cytoband$chrom))
+
+cytoband$chrom <- factor(cytoband$chrom, levels = chromosome.index)
+
+# Rescaling the AAV size to emphasize it
+xrange = c(cytoband %>%  filter(chrom %in% c(seq(1:20),"X")) %>% pull(end),
+           cytoband %>% filter(!chrom %in% c(seq(1:20),"X")) %>% mutate(length=end-start) %>% pull(length))
+normal_chr_index = 1:21
+zoomed_chr_index = 22:27
+
+# normalize in normal chromsomes and zoomed chromosomes separately
+sector.width = c(xrange[normal_chr_index] / sum(xrange[normal_chr_index]), 
+                 0.3*xrange[zoomed_chr_index] / sum(xrange[zoomed_chr_index])) 
+
+#########################
+### Step 2 Extracting data to be plotted
+
+# Cyno section
+cyno.tes<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>%
+  mutate(group_name = "TES")
+
+# Creating the two bed files
+t.host <- cyno.tes %>%
+  mutate(end = start + width) %>% 
+  filter(sample_id == "191107330" & source == "host") %>% 
+  select(read, chromosome, start, end) %>%
+  filter(chromosome %in% c(seq(1:20), "X")) %>% # ,"Y","MT")) %>%
+  mutate(chromosome = paste0("chr_",chromosome)) %>%
+  unique()
+
+t.vir <- cyno.tes %>%
+  mutate(end = start + width) %>% 
+  filter(sample_id == "191107330" & source == "virus") %>% 
+  filter(read %in% t.host$read) %>% 
+  select(read, chromosome, start, end) %>%
+  mutate(chromosome = "chr_aav") %>%
+  unique() %>%
+  mutate(chromosome = ifelse(start < 153, "chr_itr_5pr",
+                             ifelse(start < 534, "chr_cmv_enhancer",
+                                    ifelse(start < 757, "chr_chicken_beta_actin",
+                                           ifelse(start < 1835, "chr_chimeric_intron",
+                                                  ifelse(start < 2053, "chr_sv40_poly_a","chr_itr_3pr"))))))
+
+band.data = as.data.frame(rbind(t.host %>% select(-read), 
+                 t.vir %>% select(-read)))
+
+band.list = list(t.host %>% select(-read), 
+                 t.vir %>% select(-read))
+
+# Creating link data
+t.mer <- left_join(t.host %>% select(read, chrom.host = chromosome, start.host = start), 
+                   t.vir %>% select(read, chrom.vir = chromosome, start.vir = start), by = "read")
+
+t.mer.host <- t.mer %>% select(chromosome = chrom.host, start = start.host)
+
+t.mer.vir <- t.mer %>% select(chromosome = chrom.vir, start = start.vir)
+## Creating color pal
+col.vir <- brewer.pal(length(unique(t.mer.vir$chromosome)), "Set3")
+names(col.vir)<- unique(t.mer.vir$chromosome)
+mcol.vir <- melt(col.vir)
+mcol.vir$chromosome <- rownames(mcol.vir)
+
+## Merging back
+t.mer.vir <- merge(t.mer.vir, mcol.vir, by = "chromosome")
+
+
+#########################
+# Step 3: Hotspot data
+# Read in hotspots
+files<-list.files(path = "../data/hotspot", pattern = "HSscores.csv$", full.names = TRUE, recursive = TRUE)
+
+hot<-data.frame(group = c(),
+                chr = c(),
+                start = c(),
+                end = c(),
+                size = c(),
+                vis.per.mb = c(),
+                pct.vis.of.total = c(),
+                pct.vis.of.hotvis = c(),
+                species = c(),
+                method = c())
+
+for(i in files){
+  # Reading in file
+  temp<-read_csv(i)
+  
+  # Colnames
+  colnames(temp)<-c("group","chr","start.mb","end.mb","start","end","num.vis","size","vis.per.mb","pct.vis.of.total","pct.vis.of.hotvis","rando1","rando2","rando3","rando4")
+  
+  # Getting species and method
+  base<-gsub(".*hotspot\\/","", i)
+  species<-gsub("\\_.*","", base)
+  
+  # Adding to temp
+  temp$species<-species
+
+  hot<-rbind(hot,
+             temp %>% select(group, chr, start, end, size, vis.per.mb, pct.vis.of.total, pct.vis.of.hotvis, species))
+
+}
+
+hot$group<-gsub("\\_ffpe","\\.ffpe",hot$group)
+
+info<-as.data.frame(str_split(hot$group, "_", simplify = TRUE))
+colnames(info)<-c("dose_group","tissue","method")
+
+hot<-cbind(hot,info)
+
+hot$dose_group<-factor(hot$dose_group, levels = c("ctrl","low","high"))
+
+hot.tse <- hot %>%
+  filter(group == "high_liver_tse") %>%
+  mutate(chr = paste0("chr_",chr)) %>%
+  select(chromosome = chr, start, end)
+  
+#########################
+# The circos plot
+
+# Specifying gap positions and widths
+circos.par(gap.after = c(rep(2, 20), 5, rep(5,5), 5),
+           start.degree = 120)
+
+# Initializing
+circos.initializeWithIdeogram(cytoband, chromosome.index = chromosome.index, plotType = NULL,
+                              sector.width = sector.width)
+
+
+circos.track(ylim = c(0, 1), panel.fun = function(x, y) {
+  # Adding text to the outside of cells
+  circos.text(CELL_META$xcenter, CELL_META$ylim[2] + mm_y(2), 
+        gsub(".*chr_", "", CELL_META$sector.index), cex = 1, niceFacing = TRUE,
+        facing = "outside")#, facing = "clockwise")
+  
+}, track.height = mm_h(1), cell.padding = c(0, 0, 0, 0), bg.border = NA)
+
+highlight.chromosome(paste0("chr_", c(1:20, "X")), 
+    col = "red", track.index = 1)
+
+highlight.chromosome(aav.band$chrom, 
+    col = "blue", track.index = 1)
+
+# Adding points for insertion
+# circos.track(ylim = c(0, 1), panel.fun = function(x,y){
+# 
+#   circos.rect(xleft = band.data %>% filter(chromosome == unique(CELL_META$sector.index)) %>% pull(start),
+#               xright = band.data %>% filter(chromosome == unique(CELL_META$sector.index)) %>% pull(end),
+#               ybottom = 0, ytop = 1, alpha = 0.1)
+# })
+
+
+
+# Rainfall
+#circos.genomicRainfall(band.data, pch = 16, cex = 0.4, col = "grey50")
+circos.genomicDensity(band.data, count_by = "number")
+
+# Hotspot
+# circos.track(ylim = c(0, 1), panel.fun = function(x,y){
+#   l = hot.tse$chromosome == CELL_META$sector.index
+#             if(sum(l)) {
+#                 for(i in which(l)) {
+#                     circos.rect(hot.tse[i, 2], CELL_META$cell.ylim[1],
+#                                 hot.tse[i, 3], CELL_META$cell.ylim[2],
+#                                 col = "firebrick2",
+#                                 border = "firebrick2")
+#                   }
+#               }
+#   })
+
+# Links
+circos.genomicLink(t.mer.host, t.mer.vir %>% select(-value), lwd = 0.1, col = t.mer.vir$value)
+
+circos.clear()
+#########################
+
+```
+
+# Fig S4 - full IS detection comparison between methods
+
+```{r,message=FALSE, error=FALSE, warning=FALSE, echo=FALSE}
+# Getting tx.ref from genome
+g.ref <- genes(loadDb("../data/cyno.ref.db"))
+
+# Impacted genes
+is.gene.res.cyno <- data.frame(EntrezId = c(),
+                          egid = c(),
+                          gnm = c(),
+                          gdsc = c(),
+                          sample_id = c(),
+                          distance = c(),
+                          vir.source = c(),
+                          vir.start = c(),
+                          vir.width = c(),
+                          id = c())
+
+# Loading full cyno
+# Cyno section
+cyno.tes.host<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% cyno.tes$read)
+cyno.tes.ffpe.host<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES_FFPE")%>% filter(read %in% cyno.tes.ffpe$read)
+cyno.septs.host<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg.host<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% cyno.wg$read)
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes.host),
+            as.data.frame(cyno.tes.ffpe.host),
+            as.data.frame(cyno.septs.host),
+            as.data.frame(cyno.wg.host))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id") %>% 
+  filter(chromosome %in% c(seq(1:20),"X"))
+
+# Looping through samples
+for(i in unique(cyno %>% 
+                filter(dose_group != "ctrl") %>% 
+                mutate(sam_tis_group = paste0(sample_id, "_", tissue,"_",group_name)) %>% 
+                pull(sam_tis_group))){
+  # creating ranges for samples that have non-zero IS counts
+  dat.ranges<-GRanges(cyno %>% 
+                        mutate(sam_tis_group = paste0(sample_id, "_", tissue,"_",group_name),
+                               end = start+width) %>% 
+                        filter(dose_group != "ctrl") %>% 
+                        filter(source == "host") %>% 
+                        filter(sam_tis_group == i) %>% 
+                        #filter(mask_homology == 0 & mask_target == 0) %>% 
+                        dplyr::select(chromosome, start, end, sample_id, read) %>% 
+                        left_join(cyno %>% 
+                                    filter(source == "virus") %>% 
+                                    dplyr::select(read, vir.source = chromosome, vir.start = start, vir.widht = width), by = "read") %>% 
+                        dplyr::select(-read) %>% 
+                        unique())
+  
+  # Grabbing nearest gene
+  near.dist.g <- as.data.frame(distanceToNearest(dat.ranges, g.ref))
+  
+  # Merging results from insert and gene sid
+  near.genes <- cbind(as.data.frame(dat.ranges[near.dist.g[,1]]),
+                    g.ref[near.dist.g[,2]]$gene_id,
+                    near.dist.g$distance)
+  
+  colnames(near.genes) <- c("chromosome","start","end","width","strand","sample_id","vir.source","vir.start","vir.width","egid","distance")
+  
+  # Extracting the entrez ids
+  sql_in_generator <- function(x, quote = T){
+
+  if(quote==T){
+    x <- paste0("'",x,"'")
+    }
+  
+  in_statement <- paste0(" IN (", paste(x, collapse = ","), ")")
+  return(in_statement)
+  }
+  
+  g_egid<-sql_in_generator(near.genes$egid, quote = T)
+  
+  # Getting human gene equivalents
+  gene.entr<-unique(as.data.table(dbGetQuery(zoomapcon,paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc,
+                    gene.egid
+                    FROM ncbi, homolog, gene
+                    WHERE
+                    gene.egid ",g_egid,"
+                    AND (
+                        homolog.egid_homolog = gene.egid
+                      OR
+                        homolog.egid_human   = gene.egid)
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid"))))
+  
+  colnames(gene.entr)<-c("EntrezId","egid","gnm","gdsc","orig_egid")
+  
+  ind.gene.res.2 <- near.genes %>% 
+    dplyr::select(sample_id, egid, distance, vir.source, vir.start, vir.width) %>% 
+    left_join(gene.entr, by = c("egid"="orig_egid")) %>% 
+    dplyr::select(EntrezId, egid, gnm, gdsc, sample_id , distance, vir.source, vir.start, vir.width) %>% 
+    mutate(id = i)
+  
+  # Binding back to original object
+  is.gene.res.cyno <- rbind(is.gene.res.cyno,
+                       unique(ind.gene.res.2))
+}
+
+is.gene.res.cyno <- is.gene.res.cyno %>% 
+  left_join(meta.cyno, by = "sample_id") %>% 
+  mutate(gnm = ifelse(is.na(gnm), "-", gnm)) %>% 
+  filter(distance < 50000) #Filtering based on 50 kb
+
+  
+# Extracting gene names found in more than 1 sample
+
+dups <- names(table(is.gene.res.cyno$egid)[table(is.gene.res.cyno$egid)>1])
+
+# Printing out genes per animal
+per.sample.cyno <- aggregate(sample_id ~ egid,
+                        data = is.gene.res.cyno, unique) %>% 
+  left_join(aggregate(distance ~ egid,
+                      data = is.gene.res.cyno, unique), by = "egid") %>% 
+  left_join(aggregate(gnm ~ egid,
+                      data = is.gene.res.cyno, unique), by = "egid") %>% 
+  left_join(is.gene.res.cyno %>% 
+              group_by(egid) %>% 
+              mutate(n.insertions = n()) %>% 
+              dplyr::select(egid, n.insertions), 
+            by = "egid") %>%
+  left_join(is.gene.res.cyno %>% 
+              dplyr::select(egid,sample_id) %>% 
+              unique() %>% 
+              group_by(egid) %>% 
+              mutate(n.samples = n()) %>% 
+              dplyr::select(egid, n.samples), 
+            by = "egid") %>%
+  arrange(desc(n.samples), desc(n.insertions)) %>%
+  unique() %>% 
+  dplyr::select(samples_impacted = sample_id, gnm, everything())
+
+per.sample.cyno$samples_impacted <- sapply(per.sample.cyno$samples_impacted, toString)
+per.sample.cyno$gnm <- sapply(per.sample.cyno$gnm, toString)
+per.sample.cyno$distance <- sapply(per.sample.cyno$distance, toString)
+
+
+per.sample.cyno$samples_impacted <- gsub("\\,","\\ |", per.sample.cyno$samples_impacted)
+
+
+# if (nrow(plot_data) > 20) {
+#   plot_data <- plot_data %>% 
+#     arrange(desc(diff_sizes), as.numeric(chromosome), desc(chr_loc)) %>% 
+#     top_n(20, diff_sizes)
+#   title <- "Note: Plot limited to top 20 sites"
+#   subtitle <- "(see table for full list)"
+# }
+
+#blah
+
+knitr::kable(per.sample.cyno %>%
+               filter(n.samples > 1 & n.insertions > 1) %>% 
+               slice_head(n=10))
+
+# Casting to figure out which genes are discovered across
+is.g <- unique(is.gene.res.cyno)
+cast.g.cyno <- dcast(is.g %>% mutate(method = gsub(".*\\_","",id)), 
+                sample_id+gnm+tissue ~ method) %>% select(-FFPE) %>% filter(gnm != "-") %>% 
+  select(everything(),SEPTS="S-EPTS")
+
+cast.g.cyno <- cast.g.cyno %>% 
+  mutate(shared = ifelse(SEPTS > 0 & TES > 0 & WG > 0, "ALL",
+                         ifelse(SEPTS > 0 & TES > 0, "S-EPTS+TES",
+                                ifelse(SEPTS > 0 & WG > 0, "S-EPTS+WG",
+                                       ifelse(TES > 0 & WG > 0, "TES+WG","UNIQUE")))))
+# Within individual re-discovery across methods
+ggplot(cast.g.cyno,
+       aes(x = forcats::fct_infreq(shared), fill = shared))+
+  geom_bar(stat = "count", position = position_dodge())+
+  theme_bw()+
+  theme(legend.position = "none")+
+  scale_y_log10()+
+  xlab("Methods identifying same impacted gene within same sample")
+  #geom_tile()
+
+```
+
+## Doing the above gene id for mouse and merging
+
+```{r,message=FALSE, error=FALSE, warning=FALSE, echo=FALSE}
+# Getting tx.ref from genome
+g.ref.mouse <- genes(loadDb("../data/mouse.ref.db"))
+
+# Impacted genes
+is.gene.res.mouse <- data.frame(EntrezId = c(),
+                          egid = c(),
+                          gnm = c(),
+                          gdsc = c(),
+                          sample_id = c(),
+                          distance = c(),
+                          vir.source = c(),
+                          vir.start = c(),
+                          vir.width = c(),
+                          id = c())
+
+# Loading full mouse
+mouse.tes<-readRDS("../data/mouse_tes/mouse_tes_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% mouse.tes$read)
+mouse.septs<-readRDS("../data/mouse_septs/mouse_septs_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+mouse.wg<-readRDS("../data/mouse_wg/mouse_wg_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% mouse.wg$read)
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.tes),
+            as.data.frame(mouse.septs),
+            as.data.frame(mouse.wg))
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Adding metadata
+mouse <- mouse %>%
+  left_join(meta.mouse, by = "sample_id")
+
+# Looping through samples
+for(i in unique(mouse %>% 
+                filter(dose_group != "ctrl") %>% 
+                mutate(sam_tis_group = paste0(sample_id, "_", tissue,"_",group_name)) %>% 
+                pull(sam_tis_group))){
+  # creating ranges for samples that have non-zero IS counts
+  dat.ranges<-GRanges(mouse %>% 
+                        mutate(sam_tis_group = paste0(sample_id, "_", tissue,"_",group_name),
+                               end = start+width) %>% 
+                        filter(dose_group != "ctrl") %>% 
+                        filter(source == "host") %>% 
+                        filter(sam_tis_group == i) %>% 
+                        #filter(mask_homology == 0 & mask_target == 0) %>% 
+                        dplyr::select(chromosome, start, end, sample_id, read) %>% 
+                        left_join(mouse %>% 
+                                    filter(source == "virus") %>% 
+                                    dplyr::select(read, vir.source = chromosome, vir.start = start, vir.widht = width), by = "read") %>% 
+                        dplyr::select(-read) %>% 
+                        unique())
+  
+  # Grabbing nearest gene
+  near.dist.g <- as.data.frame(distanceToNearest(dat.ranges, g.ref))
+  
+  # Merging results from insert and gene sid
+  near.genes <- cbind(as.data.frame(dat.ranges[near.dist.g[,1]]),
+                    g.ref[near.dist.g[,2]]$gene_id,
+                    near.dist.g$distance)
+  
+  colnames(near.genes) <- c("chromosome","start","end","width","strand","sample_id","vir.source","vir.start","vir.width","egid","distance")
+  
+  # Extracting the entrez ids
+  sql_in_generator <- function(x, quote = T){
+
+  if(quote==T){
+    x <- paste0("'",x,"'")
+    }
+  
+  in_statement <- paste0(" IN (", paste(x, collapse = ","), ")")
+  return(in_statement)
+  }
+  
+  g_egid<-sql_in_generator(near.genes$egid, quote = T)
+  
+  # Getting human gene equivalents
+  gene.entr<-unique(as.data.table(dbGetQuery(zoomapcon,paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc,
+                    gene.egid
+                    FROM ncbi, homolog, gene
+                    WHERE
+                    gene.egid ",g_egid,"
+                    AND (
+                        homolog.egid_homolog = gene.egid
+                      OR
+                        homolog.egid_human   = gene.egid)
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid"))))
+  
+  colnames(gene.entr)<-c("EntrezId","egid","gnm","gdsc","orig_egid")
+  
+  ind.gene.res.2 <- near.genes %>% 
+    dplyr::select(sample_id, egid, distance, vir.source, vir.start, vir.width) %>% 
+    left_join(gene.entr, by = c("egid"="orig_egid")) %>% 
+    dplyr::select(EntrezId, egid, gnm, gdsc, sample_id , distance, vir.source, vir.start, vir.width) %>% 
+    mutate(id = i)
+  
+  # Binding back to original object
+  is.gene.res.mouse <- rbind(is.gene.res.mouse,
+                       unique(ind.gene.res.2))
+}
+
+is.gene.res.mouse <- is.gene.res.mouse %>% 
+  left_join(meta.mouse, by = "sample_id") %>% 
+  mutate(gnm = ifelse(is.na(gnm), "-", gnm)) %>% 
+  filter(distance < 50000) #Filtering based on 50 kb
+
+  
+# Extracting gene names found in more than 1 sample
+
+dups <- names(table(is.gene.res.mouse$egid)[table(is.gene.res.mouse$egid)>1])
+
+# Printing out genes per animal
+per.sample.mouse <- aggregate(sample_id ~ egid,
+                        data = is.gene.res.mouse, unique) %>% 
+  left_join(aggregate(distance ~ egid,
+                      data = is.gene.res.mouse, unique), by = "egid") %>% 
+  left_join(aggregate(gnm ~ egid,
+                      data = is.gene.res.mouse, unique), by = "egid") %>% 
+  left_join(is.gene.res.mouse %>% 
+              group_by(egid) %>% 
+              mutate(n.insertions = n()) %>% 
+              dplyr::select(egid, n.insertions), 
+            by = "egid") %>%
+  left_join(is.gene.res.mouse %>% 
+              dplyr::select(egid,sample_id) %>% 
+              unique() %>% 
+              group_by(egid) %>% 
+              mutate(n.samples = n()) %>% 
+              dplyr::select(egid, n.samples), 
+            by = "egid") %>%
+  arrange(desc(n.samples), desc(n.insertions)) %>%
+  unique() %>% 
+  dplyr::select(samples_impacted = sample_id, gnm, everything())
+
+per.sample.mouse$samples_impacted <- sapply(per.sample.mouse$samples_impacted, toString)
+per.sample.mouse$gnm <- sapply(per.sample.mouse$gnm, toString)
+per.sample.mouse$distance <- sapply(per.sample.mouse$distance, toString)
+
+
+per.sample.mouse$samples_impacted <- gsub("\\,","\\ |", per.sample.mouse$samples_impacted)
+
+
+# kable
+knitr::kable(per.sample.mouse %>%
+               filter(n.samples > 1 & n.insertions > 1) %>% 
+               slice_head(n=10))
+
+# Casting to figure out which genes are discovered across
+is.g <- unique(is.gene.res.mouse)
+cast.g.mouse <- dcast(is.g %>% mutate(method = gsub(".*\\_","",id)), 
+                sample_id+gnm+tissue ~ method) %>% filter(gnm != "-") %>% 
+  select(everything(),SEPTS="S-EPTS")
+
+cast.g.mouse <- cast.g.mouse %>% 
+  mutate(shared = ifelse(SEPTS > 0 & TES > 0 & WG > 0, "ALL",
+                         ifelse(SEPTS > 0 & TES > 0, "S-EPTS+TES",
+                                ifelse(SEPTS > 0 & WG > 0, "S-EPTS+WG",
+                                       ifelse(TES > 0 & WG > 0, "TES+WG","UNIQUE")))))
+# Within individual re-discovery across methods
+ggplot(cast.g.mouse,
+       aes(x = forcats::fct_infreq(shared), fill = shared))+
+  geom_bar(stat = "count", position = position_dodge())+
+  theme_bw()+
+  theme(legend.position = "none")+
+  scale_y_log10()+
+  xlab("Methods identifying same impacted gene within same sample")
+  #geom_tile()
+
+# Merging mouse and cyno
+cast.g.cyno$species <- "cyno"
+cast.g.mouse$species <- "mouse"
+
+cast.g.tot <- rbind(cast.g.cyno,
+                    cast.g.mouse)
+
+# Plotting both species
+tiff("../extras/for_paper/is.detection.tiff", units="px", width=2000, height=1200, res=300, compression = 'lzw')
+ggplot(cast.g.tot,
+       aes(x = forcats::fct_infreq(shared), fill = shared))+
+  geom_bar(stat = "count", position = position_dodge())+
+  theme_bw()+
+  facet_grid(species~.)+
+  theme(legend.position = "none")+
+  scale_y_log10()+
+  geom_label(stat = "count", aes(label=..count..), vjust=+1, fill = "white", cex = 3)+
+  xlab("Methods identifying same impacted gene within same sample")+
+  ylab("Number of impacted genes")
+graphics.off()
+
+# Merging reads
+is.gene.res <- rbind(is.gene.res.cyno,
+                     is.gene.res.mouse)
+write.csv(is.gene.res,"../extras/for_paper/is.gene.res.csv", row.names = FALSE, quote = FALSE)
+
+```
+
+# Fig 4 - simulating cyno inserts (gene level)
+
+```{r}
+library(BSgenome)
+library(GenomeInfoDb)
+
+# Getting tx.ref from genome
+g.ref <- genes(loadDb("../data/cyno.ref.db"))
+
+# Cancer genes
+canc <- read_csv("../cancer_gene_census_v95.csv")
+
+### Start: Loading data
+cyno.tes.host<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% cyno.tes$read)
+cyno.tes.ffpe.host<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES_FFPE")%>% filter(read %in% cyno.tes.ffpe$read)
+cyno.septs.host<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg.host<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% cyno.wg$read)
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes.host),
+            as.data.frame(cyno.tes.ffpe.host),
+            as.data.frame(cyno.septs.host),
+            as.data.frame(cyno.wg.host))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id") %>% 
+  filter(chromosome %in% c(seq(1:20),"X"))
+
+# Creating values for labeler
+clab<-unique(cyno %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+cyno$dose_group<-factor(cyno$dose_group,levels = c("ctrl","low","high"))
+cyno$chromosome <- factor(cyno$chromosome, levels = c(seq(1:20),"X"))
+cyno$species <- "cyno"
+
+### End: Loading data
+
+# Creating a sizes df
+cyno.seql<-data.table(chrom=c(1,10,11,12,13,14,15,16,17,18,19,2,20,3,4,5,6,7,8,9,"X"),
+                      start = rep(1,21),
+                      length =c(227556264, 96509753, 137757926, 132586672, 111193037, 130733371,
+                                   112612857, 80997621, 96864807, 75711847, 59248254, 192460366,
+                                   78541002, 192294377, 170955103, 189454096, 181584905, 171882078,
+                                   146850525, 133195287, 152835861))
+
+#####################################################
+# Creating object for actual samples
+# Impacted genes
+is.gene.res.cyno <- data.frame(EntrezId = c(),
+                          egid = c(),
+                          gnm = c(),
+                          gdsc = c(),
+                          sample_id = c(),
+                          distance = c(),
+                          vir.source = c(),
+                          vir.start = c(),
+                          vir.width = c(),
+                          id = c())
+
+start<-Sys.time()
+# Looping through samples
+for(i in unique(cyno %>% 
+                filter(dose_group != "ctrl") %>% 
+                pull(group_name))){
+  # creating ranges for samples that have non-zero IS counts
+  dat.ranges<-GRanges(cyno %>% 
+                        mutate(end = start+width) %>% 
+                        filter(dose_group != "ctrl") %>% 
+                        filter(source == "host") %>% 
+                        filter(group_name == i) %>% 
+                        #filter(mask_homology == 0 & mask_target == 0) %>% 
+                        dplyr::select(chromosome, start, end, sample_id, read) %>% 
+                        left_join(cyno %>% 
+                                    filter(source == "virus") %>% 
+                                    dplyr::select(read, vir.source = chromosome, vir.start = start, vir.width = width), by = "read") %>% 
+                        dplyr::select(-read) %>% 
+                        unique())
+  
+  # Grabbing nearest gene
+  near.dist.g <- as.data.frame(distanceToNearest(dat.ranges, g.ref))
+  
+  # Merging results from insert and gene sid
+  near.genes <- cbind(as.data.frame(dat.ranges[near.dist.g[,1]]),
+                    g.ref[near.dist.g[,2]]$gene_id,
+                    near.dist.g$distance)
+  
+  colnames(near.genes) <- c("chromosome","start","end","width","strand","sample_id","vir.source","vir.start","vir.width","egid","distance")
+  
+  # Extracting the entrez ids
+  sql_in_generator <- function(x, quote = T){
+
+  if(quote==T){
+    x <- paste0("'",x,"'")
+    }
+  
+  in_statement <- paste0(" IN (", paste(x, collapse = ","), ")")
+  return(in_statement)
+  }
+  
+  g_egid<-sql_in_generator(near.genes$egid, quote = T)
+  
+  # Getting human gene equivalents
+  gene.entr<-unique(as.data.table(dbGetQuery(zoomapcon,paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc,
+                    gene.egid
+                    FROM ncbi, homolog, gene
+                    WHERE
+                    gene.egid ",g_egid,"
+                    AND (
+                        homolog.egid_homolog = gene.egid
+                      OR
+                        homolog.egid_human   = gene.egid)
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid"))))
+  
+  colnames(gene.entr)<-c("EntrezId","egid","gnm","gdsc","orig_egid")
+  
+  ind.gene.res.2 <- near.genes %>% 
+    dplyr::select(sample_id, egid, distance, vir.source, vir.start, vir.width) %>% 
+    left_join(gene.entr, by = c("egid"="orig_egid")) %>% 
+    dplyr::select(EntrezId, egid, gnm, gdsc, sample_id , distance, vir.source, vir.start, vir.width) %>% 
+    mutate(id = i)
+  
+  # Binding back to original object
+  is.gene.res.cyno <- rbind(is.gene.res.cyno,
+                       unique(ind.gene.res.2))
+}
+end<-Sys.time()
+print(end-start)
+
+is.gene.res.cyno <- is.gene.res.cyno %>% 
+  left_join(meta.cyno, by = "sample_id") %>% 
+  mutate(gnm = ifelse(is.na(gnm), "-", gnm)) %>% 
+  filter(distance <= 50000) #Filtering based on 50 kb
+
+#####################################################
+
+# Functionalize the simulation
+impact.sim <- function(is.object, # Dataframe containing a column named "group_name" to subset and columns read, chromosome, start, end, width
+                       gene.object, # Object with columns for gene id (egid)
+                       iter_group_name, # Group to subset to
+                       iterations, # How many simulations per group to run
+                       canc, # set of cancer genes from cancer census
+                       chromo_band){ # a chromosome band with columns for chrom, start, length
+  
+  # A subset of the insertion events from original sample
+  is.sub.sample <- is.object %>% 
+    filter(group_name == iter_group_name) %>% 
+    filter(dose_group != "ctrl") %>% 
+    mutate(end = start+width)
+  
+  # Subsetting genes of interest (goi) to group name and non-control
+  goi.is <- gene.object %>% 
+    filter(id == iter_group_name) %>% 
+    filter(dose_group != "ctrl")
+  
+  # How many regions to sample, based on original number of regions
+  number <- dim(unique(is.sub.sample %>% select(read,chromosome, start, width)))[1]
+  
+  # Sizing the event width based on original sample
+  span <- unique(is.sub.sample %>% select(read, chromosome, start, width)) %>% pull(width)
+  
+  #chromosomes of interest
+  my_chr <- c(1:20,'X')
+  
+  # Creating a probability vector for chromosome sizes
+  my_p <- (chromo_band[,3]-chromo_band[,2])/(sum(chromo_band[,3]-chromo_band[,2]))
+  my_p <- unlist(my_p)
+  my_z <- my_p<0
+  my_p <- my_p[!my_z]
+
+  # initialise list to store chromosome sizes
+  my_chr_size <- list()
+  for (i in my_chr){
+    my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+  }
+  
+  # initialise some vectors for storing random coordinates
+  my_random_start  <- vector()
+  my_random_end    <- vector()
+  my_random_chr    <- vector()
+  my_random_strand <- vector()
+  iter.gid <- vector()
+  iter.canc <- vector()
+  
+  ### Start a loop to choose a subsampling and test its properties
+  for(iter in 1:iterations){
+    
+    #loop through number of regions
+    for(i in 1:number){
+      my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+      my_random_strand[i] <- sample(x=c('-','+'),size=1)
+      my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+      my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+      my_random_end[i] <- my_random_start[i] + span[i]
+      }
+    
+    my_random_loci <- data.frame(chr=my_random_chr,
+                                 start=my_random_start,
+                                 end=my_random_end,
+                                 strand=my_random_strand,
+                                 width = span)
+    
+    # Create grange from rand loci
+    rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+    
+    # Grabbing nearest gene
+    rand.near.g <- as.data.frame(distanceToNearest(rand_grange, g.ref))
+    
+    # ID-ing nearest gene
+    rand.near.genes <- cbind(as.data.frame(rand_grange[rand.near.g[,1]]),
+                    g.ref[rand.near.g[,2]]$gene_id,
+                    rand.near.g$distance)
+    
+    colnames(rand.near.genes) <- c("chromosome","start","end","width","strand","egid","distance")
+
+    # Subsetting for gid and canc
+    gid.interest.rand <- rand.near.genes %>% filter(distance <= 50000)
+    canc.interest.rand <- rand.near.genes %>% filter(distance <= 50000)
+    
+    # Counting number of transcripts
+    iter.gid[iter]<-(dim(gid.interest.rand)[1]/number)*100
+    
+    # Generating sql query
+    gid_egid.rand<-sql_in_generator(canc.interest.rand$egid, quote = T)
+    
+    # Grabbing enterz ids
+    gene.entr.q.rand<-paste0("SELECT
+    ncbi.entrez_gid,
+    homolog.egid_human,
+    gene.gnm,
+    gene.gdsc
+    FROM ncbi, homolog, gene
+    WHERE
+    gene.egid ",gid_egid.rand,"
+    AND
+    homolog.egid_homolog = gene.egid
+    AND
+    rnk_set = 1
+    AND
+    homolog.egid_human = ncbi.egid")
+    
+    genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+    colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+    
+    # Percentage of total reads that fall into cancer genes
+    iter.canc[iter] <- (dim(genes.rand %>% filter(EntrezId %in% canc$`Entrez GeneId`))[1]/number)*100
+
+    
+  }
+  
+  # Getting data frame of numer of genes and cancer genes hit per iteration
+  sim <- melt(data.frame(gid=iter.gid,
+                     canc=iter.canc))
+  colnames(sim) <- c("type","genes")
+  
+  # Getting the same metrics for original sample to allow for comparison
+  sample.gid<-(dim(goi.is)[1]/number)*100
+  sample.canc <- (dim(goi.is %>% filter(EntrezId %in% canc$`Entrez GeneId`))[1]/number)*100
+  
+  # Adding reference
+  sim <- sim %>% 
+    mutate(ref = ifelse(type == "gid", sample.gid, sample.canc))
+  
+  print(sim)
+}
+
+
+### Doing the simulations
+start<-Sys.time()
+sim.wg <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "WG",
+                     iterations = 1000,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.tes <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "TES",
+                     iterations = 1000,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.tes.ffpe <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "TES_FFPE",
+                     iterations = 1000,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.septs <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "S-EPTS",
+                     iterations = 1000,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+end <-Sys.time()
+
+print(end-start)
+
+########################
+
+# Merging the simulations
+sim.wg$method<-"WG"
+sim.septs$method<-"S-EPTS"
+sim.tes$method<-"TES"
+sim.tes.ffpe$method<-"TES.FFPE"
+
+sim.all <- rbind(sim.wg, sim.septs, sim.tes, sim.tes.ffpe)
+sim.all <- sim.all %>% mutate(type = ifelse(type == "gid","Impacted genes",
+                                          "Impacted cancer genes"))
+
+sim.all$type <- factor(sim.all$type, levels = c("Impacted genes","Impacted cancer genes"))
+
+# Plotting
+tiff("../extras/for_paper/fig4.tiff", units="px", width=2400, height=1200, res=300, compression = 'lzw')
+ggplot(sim.all,
+       aes(x = genes))+
+  geom_histogram(bins = 50, alpha = 0.7)+
+  facet_grid(method~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "WG"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "WG"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "S-EPTS"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "S-EPTS"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "TES"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "TES"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "TES.FFPE"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "TES.FFPE"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  theme_bw()+
+  xlab("Percent of total IS impacting genes")+
+  ylab("Number of simulated instances")+
+  theme(strip.text = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+graphics.off()
+
+```
+
+# Fig 4 - simulating cyno inserts (transcript level)
+
+```{r}
+library(BSgenome)
+library(GenomeInfoDb)
+
+# Getting tx.ref from genome
+g.ref <- transcripts(loadDb("../data/cyno.ref.db"))
+
+# Cancer genes
+canc <- read_csv("../cancer_gene_census_v95.csv")
+
+### Start: Loading data
+cyno.tes.host<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% cyno.tes$read)
+cyno.tes.ffpe.host<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "TES_FFPE")%>% filter(read %in% cyno.tes.ffpe$read)
+cyno.septs.host<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg.host<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% cyno.wg$read)
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes.host),
+            as.data.frame(cyno.tes.ffpe.host),
+            as.data.frame(cyno.septs.host),
+            as.data.frame(cyno.wg.host))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id") %>% 
+  filter(chromosome %in% c(seq(1:20),"X"))
+
+# Creating values for labeler
+clab<-unique(cyno %>% select(group_name, dose_group, tissue))
+clab.2<-paste0(clab$tissue,"_",clab$dose_group)
+names(clab.2)<-clab$group_name
+cyno$dose_group<-factor(cyno$dose_group,levels = c("ctrl","low","high"))
+cyno$chromosome <- factor(cyno$chromosome, levels = c(seq(1:20),"X"))
+cyno$species <- "cyno"
+
+### End: Loading data
+
+# Creating a sizes df
+cyno.seql<-data.table(chrom=c(1,10,11,12,13,14,15,16,17,18,19,2,20,3,4,5,6,7,8,9,"X"),
+                      start = rep(1,21),
+                      length =c(227556264, 96509753, 137757926, 132586672, 111193037, 130733371,
+                                   112612857, 80997621, 96864807, 75711847, 59248254, 192460366,
+                                   78541002, 192294377, 170955103, 189454096, 181584905, 171882078,
+                                   146850525, 133195287, 152835861))
+
+#####################################################
+# Creating object for actual samples
+# Impacted genes
+is.gene.res.cyno <- data.frame(EntrezId = c(),
+                          egid = c(),
+                          gnm = c(),
+                          gdsc = c(),
+                          sample_id = c(),
+                          distance = c(),
+                          id = c())
+
+start<-Sys.time()
+# Looping through samples
+for(i in unique(cyno %>% 
+                filter(dose_group != "ctrl") %>% 
+                pull(group_name))){
+  # creating ranges for samples that have non-zero IS counts
+  dat.ranges<-GRanges(cyno %>% 
+                        mutate(end = start+width) %>% 
+                        filter(dose_group != "ctrl") %>% 
+                        filter(source == "host") %>% 
+                        filter(group_name == i) %>% 
+                        #filter(mask_homology == 0 & mask_target == 0) %>% 
+                        dplyr::select(chromosome, start, end, sample_id, read) %>% 
+                        left_join(cyno %>% 
+                                    filter(source == "virus") %>% 
+                                    dplyr::select(read, vir.source = chromosome, vir.start = start, vir.width = width), by = "read") %>% 
+                        dplyr::select(-read) %>% 
+                        unique())
+  
+  # Grabbing nearest gene
+  near.dist.g <- as.data.frame(distanceToNearest(dat.ranges, g.ref))
+  
+  # Merging results from insert and gene sid
+  near.genes <- cbind(as.data.frame(dat.ranges[near.dist.g[,1]]),
+                    g.ref[near.dist.g[,2]]$tx_name,
+                    near.dist.g$distance)
+  
+  colnames(near.genes) <- c("chromosome","start","end","width","strand","sample_id","vir.source","vir.start","vir.width","egid","distance")
+  
+  # Extracting the entrez ids
+  sql_in_generator <- function(x, quote = T){
+
+  if(quote==T){
+    x <- paste0("'",x,"'")
+    }
+  
+  in_statement <- paste0(" IN (", paste(x, collapse = ","), ")")
+  return(in_statement)
+  }
+  
+  g_egid<-sql_in_generator(near.genes$egid, quote = T)
+  
+  # Getting human gene equivalents
+  gene.entr<-unique(as.data.table(dbGetQuery(zoomapcon,paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc,
+                    transcript.etid
+                    FROM ncbi, homolog, gene, transcript
+                    WHERE
+                    transcript.etid ",g_egid,"
+                    AND
+                    homolog.egid_homolog = transcript.egid
+                    AND
+                    gene.egid = homolog.egid_human
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid"))))
+  
+  colnames(gene.entr)<-c("EntrezId","egid","gnm","gdsc","etid")
+  
+  ind.gene.res.2 <- near.genes %>% 
+    dplyr::select(sample_id, etid=egid, distance) %>% 
+    left_join(gene.entr, by = "etid") %>% 
+    dplyr::select(EntrezId, etid, gnm, gdsc, distance,sample_id) %>% 
+    mutate(id = i)
+  
+  # Binding back to original object
+  is.gene.res.cyno <- rbind(is.gene.res.cyno,
+                       unique(ind.gene.res.2))
+}
+end<-Sys.time()
+print(end-start)
+
+is.gene.res.cyno <- is.gene.res.cyno %>% 
+  left_join(meta.cyno, by = "sample_id") %>% 
+  mutate(gnm = ifelse(is.na(gnm), "-", gnm)) %>% 
+  dplyr::filter(distance <= 50000) #Filtering based on 50 kb
+
+#####################################################
+
+# Functionalize the simulation
+impact.sim <- function(is.object, # Dataframe containing a column named "group_name" to subset and columns read, chromosome, start, end, width
+                       gene.object, # Object with columns for gene id (egid)
+                       iter_group_name, # Group to subset to
+                       iterations, # How many simulations per group to run
+                       canc, # set of cancer genes from cancer census
+                       chromo_band){ # a chromosome band with columns for chrom, start, length
+  
+  # A subset of the insertion events from original sample
+  is.sub.sample <- is.object %>% 
+    filter(group_name == iter_group_name) %>% 
+    filter(dose_group != "ctrl") %>% 
+    mutate(end = start+width)
+  
+  # Subsetting genes of interest (goi) to group name and non-control
+  goi.is <- gene.object %>% 
+    filter(id == iter_group_name) %>% 
+    filter(dose_group != "ctrl")
+  
+  # How many regions to sample, based on original number of regions
+  #number <- dim(unique(is.sub.sample %>% select(read,chromosome, start, width)))[1]
+  number <- dim(is.sub.sample)[1]
+  
+  # Sizing the event width based on original sample
+  #span <- unique(is.sub.sample %>% select(read, chromosome, start, width)) %>% pull(width)
+  span <- is.sub.sample$width
+  
+  #chromosomes of interest
+  my_chr <- c(1:20,'X')
+  
+  # Creating a probability vector for chromosome sizes
+  my_p <- (chromo_band[,3]-chromo_band[,2])/(sum(chromo_band[,3]-chromo_band[,2]))
+  my_p <- unlist(my_p)
+  my_z <- my_p<0
+  my_p <- my_p[!my_z]
+
+  # initialise list to store chromosome sizes
+  my_chr_size <- list()
+  for (i in my_chr){
+    my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+  }
+  
+  # initialise some vectors for storing random coordinates
+  my_random_start  <- vector()
+  my_random_end    <- vector()
+  my_random_chr    <- vector()
+  my_random_strand <- vector()
+  iter.gid <- vector()
+  iter.canc <- vector()
+  
+  ### Start a loop to choose a subsampling and test its properties
+  for(iter in 1:iterations){
+    
+    #loop through number of regions
+    for(i in 1:number){
+      my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+      my_random_strand[i] <- sample(x=c('-','+'),size=1)
+      my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+      my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+      my_random_end[i] <- my_random_start[i] + span[i]
+      }
+    
+    my_random_loci <- data.frame(chr=my_random_chr,
+                                 start=my_random_start,
+                                 end=my_random_end,
+                                 strand=my_random_strand,
+                                 width = span)
+    
+    # Create grange from rand loci
+    rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+    
+    # Grabbing nearest gene
+    rand.near.g <- as.data.frame(distanceToNearest(rand_grange, g.ref))
+    
+    # ID-ing nearest gene
+    rand.near.genes <- cbind(as.data.frame(rand_grange[rand.near.g[,1]]),
+                    g.ref[rand.near.g[,2]]$tx_name,
+                    rand.near.g$distance)
+    
+    colnames(rand.near.genes) <- c("chromosome","start","end","width","strand","egid","distance")
+
+    # Subsetting for gid and canc
+    gid.interest.rand <- rand.near.genes %>% filter(distance <= 50000)
+    canc.interest.rand <- rand.near.genes %>% filter(distance <= 50000)
+    
+    # Counting number of transcripts
+    iter.gid[iter]<-(dim(gid.interest.rand)[1]/number)*100
+    
+    # Generating sql query
+    gid_egid.rand<-sql_in_generator(canc.interest.rand$egid, quote = T)
+    
+    # Grabbing enterz ids
+    gene.entr.q.rand<-paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc
+                    FROM ncbi, homolog, gene, transcript
+                    WHERE
+                    transcript.etid ",g_egid,"
+                    AND
+                    homolog.egid_homolog = transcript.egid
+                    AND
+                    gene.egid = homolog.egid_human
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid")
+    
+    genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+    colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+    
+    # Percentage of total reads that fall into cancer genes
+    iter.canc[iter] <- (dim(genes.rand %>% filter(EntrezId %in% canc$`Entrez GeneId`))[1]/number)*100
+
+    
+  }
+  
+  # Getting data frame of numer of genes and cancer genes hit per iteration
+  sim <- melt(data.frame(gid=iter.gid,
+                     canc=iter.canc))
+  colnames(sim) <- c("type","genes")
+  
+  # Getting the same metrics for original sample to allow for comparison
+  sample.gid<-(dim(goi.is)[1]/number)*100
+  sample.canc <- (dim(goi.is %>% filter(EntrezId %in% canc$`Entrez GeneId`))[1]/number)*100
+  
+  # Adding reference
+  sim <- sim %>% 
+    mutate(ref = ifelse(type == "gid", sample.gid, sample.canc))
+  
+  print(sim)
+}
+
+
+### Doing the simulations
+start<-Sys.time()
+sim.wg <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "WG",
+                     iterations = 100,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.tes <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "TES",
+                     iterations = 100,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.tes.ffpe <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "TES_FFPE",
+                     iterations = 100,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+
+sim.septs <- impact.sim(is.object = cyno,
+                     gene.object = is.gene.res.cyno,
+                     iter_group_name = "S-EPTS",
+                     iterations = 100,
+                     canc = canc,
+                     chromo_band = cyno.seql)
+end <-Sys.time()
+
+print(end-start)
+
+########################
+
+# Merging the simulations
+sim.wg$method<-"WG"
+sim.septs$method<-"S-EPTS"
+sim.tes$method<-"TES"
+sim.tes.ffpe$method<-"TES.FFPE"
+
+sim.all <- rbind(sim.wg, sim.septs, sim.tes, sim.tes.ffpe)
+sim.all <- sim.all %>% mutate(type = ifelse(type == "gid","Impacted genes",
+                                          "Impacted cancer genes"))
+
+sim.all$type <- factor(sim.all$type, levels = c("Impacted genes","Impacted cancer genes"))
+
+# Plotting
+tiff("../extras/for_paper/fig4.tiff", units="px", width=2400, height=1200, res=300, compression = 'lzw')
+ggplot(sim.all,
+       aes(x = genes))+
+  geom_histogram(bins = 50, alpha = 0.7)+
+  facet_grid(method~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "WG"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "WG"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "S-EPTS"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "S-EPTS"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "TES"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "TES"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted genes" & method == "TES.FFPE"), aes(xintercept = ref), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "Impacted cancer genes" & method == "TES.FFPE"), aes(xintercept = ref), colour = "cadetblue3", lwd = 2)+
+  theme_bw()+
+  xlab("Percent of total IS impacting genes")+
+  ylab("Number of simulated instances")+
+  theme(strip.text = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+graphics.off()
+
+```
+
+
+```{r}
+################## Whole genome
+cyno.is.wg<-cyno %>% filter(group_name == "WG") %>% filter(dose_group != "ctrl") %>% 
+  mutate(end = start+width)
+
+gid.interest.is.wg<-is.gene.res %>% 
+  filter(id %like% "WG") %>% 
+  filter(dose_group != "ctrl")
+
+#how many regions to sample?
+number <- dim(unique(cyno.is.wg %>% select(read,chromosome, start, width)))[1]
+
+#how many bp to add to start
+span <- unique(cyno.is.wg %>% select(read, chromosome, start, width)) %>% pull(width)
+
+#chromosomes of interest
+my_chr <- c(1:20,'X')
+#my_chr <- gsub(pattern="^", replacement='chr', my_chr)
+
+# Creating a probability vector for chromosome sizes
+my_p <- (cyno.seql[,3]-cyno.seql[,2])/(sum(cyno.seql[,3]-cyno.seql[,2]))
+my_p <- unlist(my_p)
+my_z <- my_p<0
+my_p <- my_p[!my_z]
+
+#initialise list to store chromosome sizes
+my_chr_size <- list()
+for (i in my_chr){
+  my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+}
+
+#checkout my_chr_size
+head(my_chr_size,2)
+
+#initialise some vectors for storing random coordinates
+my_random_start  <- vector()
+my_random_end    <- vector()
+my_random_chr    <- vector()
+my_random_strand <- vector()
+iter.gid <- vector()
+iter.canc <- vector()
+
+### Start a loop to choose a subsampling and test its properties
+for(iter in 1:1000){
+#loop through number of regions
+for(i in 1:number){
+   my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+   my_random_strand[i] <- sample(x=c('-','+'),size=1)
+   my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+   my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+   my_random_end[i] <- my_random_start[i] + span[i]
+}
+
+my_random_loci <- data.frame(chr=my_random_chr,
+                             start=my_random_start,
+                             end=my_random_end,
+                             strand=my_random_strand,
+                             width = span)
+
+# Create grange from rand loci
+rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+
+# Grab transcripts overlapping with random range
+gid.interest.rand <- data.frame(g.ref[g.ref %over% rand_grange])
+
+# Counting number of transcripts
+iter.gid[iter]<-(length(unique(gid.interest.rand$gene_id))/number)*100
+
+# Generating sql query
+gid_egid.rand<-sql_in_generator(gid.interest.rand$gene_id, quote = T)
+
+# Grabbing enterz ids
+gene.entr.q.rand<-paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc
+                    FROM ncbi, homolog, gene
+                    WHERE
+                    gene.egid ",gid_egid.rand,"
+                    AND
+                    homolog.egid_homolog = gene.egid
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid")
+
+genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+
+# Getting the cancer sampled
+iter.canc[iter] <- ((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.rand$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(gid.interest.rand$gene_id)))*100
+}
+
+sim.wg <- melt(data.frame(gid=iter.gid,
+                     canc=iter.canc))
+
+colnames(sim.wg) <- c("type","genes")
+
+wg.gid<-(length(unique(gid.interest.is.wg$egid))/number)*100
+wg.canc<-((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.wg$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(gid.interest.is.wg$egid)))*100
+
+# Adding reference
+sim.wg <- sim.wg %>% 
+  mutate(ref = ifelse(type == "gid", wg.gid, wg.canc))
+
+ggplot(sim.wg,
+       aes(x = genes))+
+  geom_histogram(bins = 20)+
+  facet_wrap(.~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.wg, type == "gid"), aes(xintercept = wg.gid), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.wg, type == "canc"), aes(xintercept = wg.canc), colour = "cadetblue3", lwd = 2)
+########################
+
+################## GW
+cyno.is.gw<-as.data.table(redobj.cyno[redobj.cyno$set=="gw"])[seqnames %in% c(seq(1,20),"X")]
+cyno.is.gw$seqnames<-droplevels(cyno.is.gw$seqnames)
+tx.interest.is.gw<-data.frame(cyno.tx[cyno.tx %over% makeGRangesFromDataFrame(cyno.is.gw)])
+
+#how many regions to sample?
+number <- dim(unique(cyno.is.gw[,.(seqnames,start,end)]))[1]
+
+#how many bp to add to start
+span <- unique(cyno.is.gw[,.(seqnames,start,end,width)])[,width]
+
+#load library
+
+#chromosomes of interest
+my_chr <- c(1:20,'X')
+#my_chr <- gsub(pattern="^", replacement='chr', my_chr)
+
+# Creating a probability vector for chromosome sizes
+my_p <- (cyno.seql[,3]-cyno.seql[,2])/(sum(cyno.seql[,3]-cyno.seql[,2]))
+my_p <- unlist(my_p)
+my_z <- my_p<0
+my_p <- my_p[!my_z]
+
+#initialise list to store chromosome sizes
+my_chr_size <- list()
+for (i in my_chr){
+  my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+}
+
+#checkout my_chr_size
+head(my_chr_size,2)
+
+#initialise some vectors for storing random coordinates
+my_random_start  <- vector()
+my_random_end    <- vector()
+my_random_chr    <- vector()
+my_random_strand <- vector()
+iter.tx <- vector()
+iter.canc <- vector()
+
+### Start a loop to choose a subsampling and test its properties
+for(iter in 1:1000){
+#loop through number of regions
+for(i in 1:number){
+   my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+   my_random_strand[i] <- sample(x=c('-','+'),size=1)
+   my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+   my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+   my_random_end[i] <- my_random_start[i] + span[i]
+}
+
+my_random_loci <- data.frame(chr=my_random_chr,
+                             start=my_random_start,
+                             end=my_random_end,
+                             strand=my_random_strand,
+                             width = span)
+
+# Create grange from rand loci
+rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+
+# Grab transcripts overlapping with random range
+tx.interest.rand <- data.frame(cyno.tx.chr[cyno.tx.chr %over% rand_grange])
+
+# Counting number of transcripts
+iter.tx[iter]<-(length(unique(tx.interest.rand$tx_name))/number)*100
+
+# Generating sql query
+tx_etid.rand<-sql_in_generator(tx.interest.rand$tx_name, quote = T)
+
+# Grabbing enterz ids
+gene.entr.q.rand<-paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc
+                    FROM ncbi, homolog, transcript, gene
+                    WHERE
+                    transcript.etid ",tx_etid.rand,"
+                    AND
+                    homolog.egid_homolog = transcript.egid
+                    AND
+                    gene.egid = homolog.egid_human
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid")
+
+genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+
+# Getting the cancer sampled
+iter.canc[iter] <- ((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.rand$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.rand$tx_name)))*100
+}
+
+sim.gw <- melt(data.frame(tx=iter.tx,
+                     canc=iter.canc))
+
+colnames(sim.gw) <- c("type","genes")
+
+gw.tx<-(length(unique(tx.interest.is.gw$tx_name))/number)*100
+gw.canc<-((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.gw$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.is.gw$tx_name)))*100
+
+# Adding reference
+sim.gw <- sim.gw %>% 
+  mutate(ref = ifelse(type == "tx", gw.tx, gw.canc))
+
+ggplot(sim.gw,
+       aes(x = genes))+
+  geom_histogram(bins = 20)+
+  facet_wrap(.~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.gw, type == "tx"), aes(xintercept = gw.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.gw, type == "canc"), aes(xintercept = gw.canc), colour = "cadetblue3", lwd = 2)
+########################
+
+
+################## TES
+cyno.is.tse<-as.data.table(redobj.cyno[redobj.cyno$set=="tse"])[seqnames %in% c(seq(1,20),"X")]
+cyno.is.tse$seqnames<-droplevels(cyno.is.tse$seqnames)
+tx.interest.is.tse <- data.frame(cyno.tx[cyno.tx %over% makeGRangesFromDataFrame(cyno.is.tse)])
+
+#how many regions to sample?
+number <- dim(unique(cyno.is.tse[,.(seqnames,start,end)]))[1]
+
+#how many bp to add to start
+span <- unique(cyno.is.tse[,.(seqnames,start,end,width)])[,width]
+
+#load library
+
+#chromosomes of interest
+my_chr <- c(1:20,'X')
+#my_chr <- gsub(pattern="^", replacement='chr', my_chr)
+
+# Creating a probability vector for chromosome sizes
+my_p <- (cyno.seql[,3]-cyno.seql[,2])/(sum(cyno.seql[,3]-cyno.seql[,2]))
+my_p <- unlist(my_p)
+my_z <- my_p<0
+my_p <- my_p[!my_z]
+
+#initialise list to store chromosome sizes
+my_chr_size <- list()
+for (i in my_chr){
+  my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+}
+
+#checkout my_chr_size
+head(my_chr_size,2)
+
+#initialise some vectors for storing random coordinates
+my_random_start  <- vector()
+my_random_end    <- vector()
+my_random_chr    <- vector()
+my_random_strand <- vector()
+iter.tx <- vector()
+iter.canc <- vector()
+
+### Start a loop to choose a subsampling and test its properties
+for(iter in 1:1000){
+#loop through number of regions
+for(i in 1:number){
+   my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+   my_random_strand[i] <- sample(x=c('-','+'),size=1)
+   my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+   my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+   my_random_end[i] <- my_random_start[i] + span[i]
+}
+
+my_random_loci <- data.frame(chr=my_random_chr,
+                             start=my_random_start,
+                             end=my_random_end,
+                             strand=my_random_strand,
+                             width = span)
+
+# Create grange from rand loci
+rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+
+# Grab transcripts overlapping with random range
+tx.interest.rand <- data.frame(cyno.tx.chr[cyno.tx.chr %over% rand_grange])
+
+# Counting number of transcripts
+iter.tx[iter]<-(length(unique(tx.interest.rand$tx_name))/number)*100
+
+# Generating sql query
+tx_etid.rand<-sql_in_generator(tx.interest.rand$tx_name, quote = T)
+
+# Grabbing enterz ids
+gene.entr.q.rand<-paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc
+                    FROM ncbi, homolog, transcript, gene
+                    WHERE
+                    transcript.etid ",tx_etid.rand,"
+                    AND
+                    homolog.egid_homolog = transcript.egid
+                    AND
+                    gene.egid = homolog.egid_human
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid")
+
+genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+
+# Getting the cancer sampled
+iter.canc[iter] <- ((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.rand$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.rand$tx_name)))*100
+}
+
+sim.tse <- melt(data.frame(tx=iter.tx,
+                     canc=iter.canc))
+
+colnames(sim.tse) <- c("type","genes")
+
+tse.tx<-(length(unique(tx.interest.is.tse$tx_name))/number)*100
+tse.canc<-((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.tse$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.is.tse$tx_name)))*100
+
+# Adding reference
+sim.tse <- sim.tse %>% 
+  mutate(ref = ifelse(type == "tx", tse.tx, tse.canc))
+
+ggplot(sim.tse,
+       aes(x = genes))+
+  geom_histogram(bins = 20)+
+  facet_wrap(.~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.tse, type == "tx"), aes(xintercept = tse.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.tse, type == "canc"), aes(xintercept = tse.canc), colour = "cadetblue3", lwd = 2)
+########################
+
+################## TES FFPE
+cyno.is.tse.ffpe<-as.data.table(redobj.cyno[redobj.cyno$set=="tse_ffpe"])[seqnames %in% c(seq(1,20),"X")]
+cyno.is.tse.ffpe$seqnames<-droplevels(cyno.is.tse.ffpe$seqnames)
+tx.interest.is.tse.ffpe <- data.frame(cyno.tx[cyno.tx %over% makeGRangesFromDataFrame(cyno.is.tse.ffpe)])
+
+#how many regions to sample?
+number <- dim(unique(cyno.is.tse.ffpe[,.(seqnames,start,end)]))[1]
+
+#how many bp to add to start
+span <- unique(cyno.is.tse.ffpe[,.(seqnames,start,end,width)])[,width]
+
+#load library
+
+#chromosomes of interest
+my_chr <- c(1:20,'X')
+#my_chr <- gsub(pattern="^", replacement='chr', my_chr)
+
+# Creating a probability vector for chromosome sizes
+my_p <- (cyno.seql[,3]-cyno.seql[,2])/(sum(cyno.seql[,3]-cyno.seql[,2]))
+my_p <- unlist(my_p)
+my_z <- my_p<0
+my_p <- my_p[!my_z]
+
+#initialise list to store chromosome sizes
+my_chr_size <- list()
+for (i in my_chr){
+  my_chr_size[[i]] <- as.numeric(cyno.seql[chrom==i,.(length)])
+}
+
+#checkout my_chr_size
+head(my_chr_size,2)
+
+#initialise some vectors for storing random coordinates
+my_random_start  <- vector()
+my_random_end    <- vector()
+my_random_chr    <- vector()
+my_random_strand <- vector()
+iter.tx <- vector()
+iter.canc <- vector()
+
+### Start a loop to choose a subsampling and test its properties
+for(iter in 1:1000){
+#loop through number of regions
+for(i in 1:number){
+   my_random_chr[i] <- sample(x=my_chr, size=1, prob = my_p)
+   my_random_strand[i] <- sample(x=c('-','+'),size=1)
+   my_max <- my_chr_size[[my_random_chr[i]]]-span[i]
+   my_random_start[i] <- round(runif(n=1, min=1, max=my_max),0)
+   my_random_end[i] <- my_random_start[i] + span[i]
+}
+
+my_random_loci <- data.frame(chr=my_random_chr,
+                             start=my_random_start,
+                             end=my_random_end,
+                             strand=my_random_strand,
+                             width = span)
+
+# Create grange from rand loci
+rand_grange <- makeGRangesFromDataFrame(my_random_loci)
+
+# Grab transcripts overlapping with random range
+tx.interest.rand <- data.frame(cyno.tx.chr[cyno.tx.chr %over% rand_grange])
+
+# Counting number of transcripts
+iter.tx[iter]<-(length(unique(tx.interest.rand$tx_name))/number)*100
+
+# Generating sql query
+tx_etid.rand<-sql_in_generator(tx.interest.rand$tx_name, quote = T)
+
+# Grabbing enterz ids
+gene.entr.q.rand<-paste0("SELECT
+                    ncbi.entrez_gid,
+                    homolog.egid_human,
+                    gene.gnm,
+                    gene.gdsc
+                    FROM ncbi, homolog, transcript, gene
+                    WHERE
+                    transcript.etid ",tx_etid.rand,"
+                    AND
+                    homolog.egid_homolog = transcript.egid
+                    AND
+                    gene.egid = homolog.egid_human
+                    AND
+                    rnk_set = 1
+                    AND
+                    homolog.egid_human = ncbi.egid")
+
+genes.rand<-unique(as.data.table(dbGetQuery(zoomapcon, gene.entr.q.rand)))
+colnames(genes.rand)<-c("EntrezId","GeneID","gnm","gdsc")
+
+# Getting the cancer sampled
+iter.canc[iter] <- ((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.rand$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.rand$tx_name)))*100
+}
+
+sim.tse.ffpe <- melt(data.frame(tx=iter.tx,
+                     canc=iter.canc))
+
+colnames(sim.tse.ffpe) <- c("type","genes")
+
+tse.ffpe.tx<-(length(unique(tx.interest.is.tse.ffpe$tx_name))/number)*100
+tse.ffpe.canc<-((canc %>%
+  dplyr::filter(`Entrez GeneId` %in% genes.tse.ffpe$EntrezId) %>% 
+  pull(`Gene Symbol`) %>% 
+  unique() %>% 
+  length())/length(unique(tx.interest.is.tse.ffpe$tx_name)))*100
+
+# Adding reference
+sim.tse.ffpe <- sim.tse.ffpe %>% 
+  mutate(ref = ifelse(type == "tx", tse.ffpe.tx, tse.ffpe.canc))
+
+ggplot(sim.tse.ffpe,
+       aes(x = genes))+
+  geom_histogram(bins = 20)+
+  facet_wrap(.~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.tse.ffpe, type == "tx"), aes(xintercept = tse.ffpe.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.tse.ffpe, type == "canc"), aes(xintercept = tse.ffpe.canc), colour = "cadetblue3", lwd = 2)
+########################
+
+# Merging the simulations
+sim.wg$method<-"wg"
+sim.gw$method<-"gw"
+sim.tse$method<-"tse"
+sim.tse.ffpe$method<-"tse.ffpe"
+
+sim.all<-rbind(sim.wg, sim.gw, sim.tse, sim.tse.ffpe)
+
+# Plotting
+
+ggplot(sim.all %>% filter(method != "tse.ffpe"),
+       aes(x = genes))+
+  geom_histogram(bins = 40)+
+  facet_grid(method~type,
+             scales = "free_x")+
+  geom_vline(data = dplyr::filter(sim.all, type == "tx" & method == "wg"), aes(xintercept = wg.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "canc" & method == "wg"), aes(xintercept = wg.canc), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "tx" & method == "gw"), aes(xintercept = gw.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "canc" & method == "gw"), aes(xintercept = gw.canc), colour = "cadetblue3", lwd = 2)+
+  geom_vline(data = dplyr::filter(sim.all, type == "tx" & method == "tse"), aes(xintercept = tse.tx), colour = "firebrick2", lwd = 2) +
+  geom_vline(data = dplyr::filter(sim.all, type == "canc" & method == "tse"), aes(xintercept = tse.canc), colour = "cadetblue3", lwd = 2)+
+  #geom_vline(data = dplyr::filter(sim.all, type == "tx" & method == "tse.ffpe"), aes(xintercept = tse.ffpe.tx), colour = #"firebrick2", lwd = 2) +
+  #geom_vline(data = dplyr::filter(sim.all, type == "canc" & method == "tse.ffpe"), aes(xintercept = tse.ffpe.canc), colour = #"cadetblue3", lwd = 2)+
+  theme_bw()
+
+```
+
+# Fig 7 - clonality graph
+
+```{r}
+clon <- rbind(readRDS("../extras/for_paper/Clonality_IS/Cyno_gw.RDS") %>% mutate(method = "S-EPTS"),
+                  readRDS("../extras/for_paper/Clonality_IS/Cyno_tse.RDS") %>% mutate(method = "TES"),
+                  readRDS("../extras/for_paper/Clonality_IS/Cyno.RDS") %>% mutate(method = "WG"),
+                  readRDS("../extras/for_paper/Clonality_IS/Mouse_gw.RDS") %>% mutate(method = "S-EPTS"),
+                  readRDS("../extras/for_paper/Clonality_IS/Mouse_tse.RDS") %>% mutate(method = "TES"),
+                  readRDS("../extras/for_paper/Clonality_IS/Mouse.RDS") %>% mutate(method = "WG")) %>% 
+  mutate(sample_id = gsub(".*\\/","",
+                          gsub("\\_sorted.*","",File)),
+         sample_id = as.numeric(sample_id)) %>% 
+  left_join(rbind(meta.cyno %>% mutate(species = "cyno"),
+                  meta.mouse %>% mutate(species = "mouse")),
+            by = "sample_id")
+
+clon$dose_group <- factor(clon$dose_group, levels = c("ctrl","low","high"))
+
+tiff("../extras/for_paper/fig6.tiff", units="px", width=2000, height=1200, res=300, compression = 'lzw')
+ggplot(clon,
+       aes(x = dose_group, y = Num_Sizes, 
+           color = as.factor(Num_Sizes), 
+       group = paste0(species, tissue, method, Location,sex)))+
+  geom_jitter(cex = 4, width = 0.1, height = 0.1, alpha = 0.6)+
+  #geom_point()+
+  geom_line(color = "black", alpha = 0.5)+
+  theme_bw()+
+  scale_color_viridis_d(direction = -1)+
+  facet_grid(species+tissue~method)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.2),
+        legend.position = "none",
+        strip.text = element_text(size = 10))+
+  ylab("Number of insert sizes found at location")+
+  xlab("Dose group")+
+  ylim(c(0,13))
+graphics.off()
+```
+
+# Fig 5: Pattern finding
+
+```{r}
+patt <- rbind(read.table("../extras/for_paper/IS_Locations/mouse_septs.stats", 
+                         skip = 13, sep = "\t", header = T) %>% mutate(source = "S-EPTS"),
+              read.table("../extras/for_paper/IS_Locations/mouse_tes.stats",
+                         skip = 13, sep = "\t", header = T) %>% mutate(source = "TES"),
+              read.table("../extras/for_paper/IS_Locations/mouse_wg.stats",
+                         skip = 13, sep = "\t", header = T) %>% mutate(source = "WG")) %>% 
+  mutate(Annotation = gsub("\\?","",
+                           gsub("\\_"," ",Annotation)))
+
+colnames(patt) <- c("annotation","num.peaks","size.bp","log2rat","logp.enrich","source")
+
+patt <- patt %>% 
+  group_by(annotation) %>% 
+  mutate(interest = ifelse(max(log2rat > 1), 1 , 0))
+
+fig5 <- ggplot(patt %>% filter(interest == 1),
+       aes(x = annotation, y = log2rat, color = log2rat > 1))+ #logp.enrich < -4.3))+
+  geom_point(cex = 7, alpha = 0.9)+
+  facet_grid(source~.)+
+  theme_bw()+
+  scale_color_brewer(palette = "Set1", direction = -1)+
+  #scale_color_manual(values = )+
+  ylab("Enrichment ratio (log2)")+
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+  geom_hline(yintercept = 1, lty = 2)
+
+fig5
+
+tiff("../extras/for_paper/fig5.tiff", units="px", width=2000, height=1200, res=300, compression = 'lzw')
+fig5
+graphics.off()
+
+```
+
+# Fig 8 - FF vs PE
+
+## Fig 8A - swapping lib protocols and sample types
+
+```{r}
+### Start: Loading data
+cyno.swap<-readRDS("../data/cyno_tes_swap/cyno_tes_swap_read.rds")
+
+# Enumerating
+len.swap <- cyno.swap %>% 
+  filter(source == "host") %>% 
+  group_by(sample_id, start, width) %>% 
+  transmute(c = n()) %>% 
+  ungroup() %>% 
+  unique() %>% 
+  group_by(sample_id) %>% 
+  transmute(c = n()) %>% 
+  unique()
+
+# Adding 0 sample (pipe just omits 0 IS samples)
+len.swap <- rbind(len.swap,
+                  data.frame(sample_id = "191107058_FF_FF",c=0))
+
+# Splitting the sample_id
+len.swap <- cbind(len.swap,
+                  as.data.frame(str_split(len.swap$sample_id, pattern = "_", simplify = TRUE)))
+colnames(len.swap) <- c("sample_id","c","sample","type","protocol")
+
+# Adding doses
+len.swap <- len.swap %>% 
+  mutate(dose = ifelse(sample %like% "spike","Control + spike",
+                       ifelse(sample == 191107058, "Control","High")))
+
+# Plotting
+tiff("../extras/for_paper/fig8a.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+ggplot(len.swap,
+       aes(x = protocol, y = c, color = type, shape = dose, group = sample))+
+  geom_point(cex = 7)+
+  geom_line(lwd = 2)+
+  scale_color_brewer(palette = "Set2")+
+  labs(color = "Sample type",
+       shape = "Animal dose")+
+  ylab("Number of regions found with insertions")+
+  xlab("Protocol used")+
+  theme_bw()+
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 12))
+graphics.off()
+```
+
+## Fig 8B - ligation vs tagmentation
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+cyno.hth<-readRDS("../data/cyno_tes_hth/cyno_tes_hth_read.rds")
+cyno.illum <- as.data.frame(readRDS("../data/cyno_tes_illum/cyno_tes_illum_is.rds"))
+
+# Enumerating
+len.hth <- cyno.hth %>% 
+  filter(source == "host") %>% 
+  group_by(sample_id, start, width) %>% 
+  transmute(c = n()) %>% 
+  ungroup() %>% 
+  unique() %>% 
+  group_by(sample_id) %>% 
+  transmute(c = n()) %>% 
+  unique() %>% 
+  filter(sample_id %in% c("191107057spike_FF","191107600_FF","191107600_PE"))
+
+# Adding 0 sample (pipe just omits 0 IS samples)
+len.hth <- rbind(len.hth,
+                  data.frame(sample_id = "191107057_FF",c=0))
+
+# Enumerating illum dataset
+len.illum <- cyno.illum %>% 
+  group_by(group_name,stype,spike,start,end) %>% 
+  transmute(c = n()) %>% 
+  ungroup() %>% 
+  unique() %>% 
+  group_by(group_name, stype, spike) %>% 
+  transmute(c = n()) %>% 
+  unique()
+
+# Aligning structure
+len.hth <- len.hth %>% 
+  mutate(dose = ifelse(sample_id %like% "spike","Control + spike",
+                       ifelse(sample_id == "191107057_FF","Control", "High")),
+         protocol = ifelse(sample_id %like% "FF", "FF","PE")) %>% 
+  mutate(prep = "ligation")
+
+len.illum <- len.illum %>% 
+  mutate(protocol = str_to_upper(stype),
+         dose = ifelse(spike == 1, "Control + spike",
+                       ifelse(group_name == 191107057, "Control","High"))) %>% 
+  ungroup() %>% 
+  select(sample_id = group_name, c, dose, protocol) %>% 
+  mutate(prep = "tagmentation")
+
+len.comp <- rbind(len.hth, len.illum)
+
+len.comp$dose <- factor(len.comp$dose, levels = c("Control","Control + spike","High"))
+
+# Figure 8b
+tiff("../extras/for_paper/fig8b.tiff", units="px", width=1800, height=1200, res=300, compression = 'lzw')
+ggplot(len.comp,
+       aes(x = prep, y = c, color = dose, shape = protocol, group = paste0(dose,protocol)))+
+  geom_line(lwd=2)+
+  geom_point(cex = 7)+
+  scale_color_viridis_d(option = "D")+
+    labs(color = "Protocol used",
+       shape = "Animal dose")+
+  ylab("Number of regions found with insertions")+
+  xlab("Library preparation")+
+  theme_bw()+
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 12))
+graphics.off()
+
+```
+
+# Multi-mapping
+
+```{r}
+# Cyno section
+cyno.tes.host<-readRDS("../data/cyno_tes/cyno_tes_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% cyno.tes$read)
+cyno.tes.ffpe.host<-readRDS("../data/cyno_tes_ffpe/cyno_tes_ffpe_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES_FFPE")%>% filter(read %in% cyno.tes.ffpe$read)
+cyno.septs.host<-readRDS("../data/cyno_septs/cyno_septs_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+cyno.wg.host<-readRDS("../data/cyno_wg/cyno_wg_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% cyno.wg$read)
+
+# Merging cyno
+cyno<-rbind(as.data.frame(cyno.tes.host),
+            as.data.frame(cyno.tes.ffpe.host),
+            as.data.frame(cyno.septs.host),
+            as.data.frame(cyno.wg.host))
+cyno$sample_id<-as.numeric(cyno$sample_id)
+
+# Adding metadata
+cyno <- cyno %>%
+  left_join(meta.cyno, by = "sample_id")
+
+# Loading full mouse
+mouse.tes<-readRDS("../data/mouse_tes/mouse_tes_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "TES") %>% filter(read %in% mouse.tes$read)
+mouse.septs<-readRDS("../data/mouse_septs/mouse_septs_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "S-EPTS")
+mouse.wg<-readRDS("../data/mouse_wg/mouse_wg_read.rds") %>% #filter(source == "host") %>%
+  mutate(group_name = "WG") %>% filter(read %in% mouse.wg$read)
+
+# Merging mouse
+mouse<-rbind(as.data.frame(mouse.tes),
+            as.data.frame(mouse.septs),
+            as.data.frame(mouse.wg))
+mouse$sample_id<-as.numeric(mouse$sample_id)
+
+# Adding metadata
+mouse <- mouse %>%
+  left_join(meta.mouse, by = "sample_id")
+
+# Cyno
+cyno.multi <- cyno %>%
+  mutate(direction = ifelse(direction > 0, 1,
+                            ifelse(direction < 0, 2, 0)),
+         read = paste0(read,direction)) %>% 
+  group_by(source, read, type) %>% 
+  mutate(count = n()) %>% 
+  select(read, chromosome, start, cigar, source, read, type, count)
+
+## Questions
+### How many multi-mapped reads
+# Host
+cyno.multi %>% filter(source == "host") %>% pull(count) %>% table()
+cyno.multi %>% filter(source == "host") %>% pull(count) %>% table()/(length(cyno.multi %>% filter(source == "host") %>% pull(count)))*100
+
+# Virus
+cyno.multi %>% filter(source == "virus") %>% pull(count) %>% table()
+cyno.multi %>% filter(source == "virus") %>% pull(count) %>% table()/(length(cyno.multi %>% filter(source == "virus") %>% pull(count)))*100
+
+# mouse
+# mouse.multi <- mouse %>% 
+#   group_by(source, read, type) %>% 
+#   mutate(count = n()) %>% 
+#   select(read, chromosome, start, cigar, source, read, type, count)
+# 
+# ## Questions
+# ### How many multi-mapped reads are in host
+# mouse.multi %>% filter(source == "virus") %>% filter(count > 2) %>% pull(type) %>% table()
+
+# Vi data
+vi.multi <- vi_data %>% 
+  group_by(source, read, type) %>% 
+  mutate(count = n()) %>% 
+  select(read, chromosome, start, cigar, source, read, type, count)
+
+```

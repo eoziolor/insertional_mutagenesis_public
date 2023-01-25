@@ -1,0 +1,275 @@
+---
+title: "1.hotspot_analysis_prep"
+author: "Elias Oziolor"
+date: '2022-09-07'
+output: html_document
+---
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Running hotspot analysis
+
+## loading needed libs and functions
+```{r}
+setwd("path/Desktop/projects/CompTox_insertmuta_DNA/")
+library(GenomicRanges)
+library(GenomicFeatures)
+library(RMariaDB)
+library(pool)
+library(tidyverse)
+
+zoomapcon<- dbPool(
+  RMariaDB::MariaDB(),
+  dbname = "dbname",
+  host = 'host',
+  username = 'user',
+  password = 'pass'
+)
+
+sql_in_generator <- function(x, quote = T){
+
+  if(quote==T){
+    x <- paste0("'",x,"'")
+  }
+  
+  in_statement <- paste0(" IN (", paste(x, collapse = ","), ")")
+  return(in_statement)
+}
+
+```
+
+# Prepping the cyno genome
+```{r}
+
+# Creating genomic reference
+gen.cyno <- makeTxDbFromGFF("path/Desktop/projects/gtfs/Macaca_fascicularis.Macaca_fascicularis_5.0.99.gtf.gz")
+
+# Getting transcripts from genome
+cyno.tx<-genes(gen.cyno)
+cyno.df <- as.data.frame(cyno.tx)
+
+# Get SQL query for genes
+gen.egid <- sql_in_generator(cyno.tx$gene_id, quote = T)
+
+# Getting human gene names
+gene.q<-paste0("SELECT
+                    gene.egid,
+                    gene.gnm
+                    FROM gene
+                    WHERE
+                    gene.egid ",gen.egid,";")
+
+genes.cyno<-as.data.frame(dbGetQuery(zoomapcon, gene.q))
+colnames(genes.cyno)<-c("gene_id","Symbol")
+
+cyno.fingenes<-left_join(cyno.df,genes.cyno, by = "gene_id")
+
+cyno.fingenes$Gene <- rownames(cyno.fingenes)
+cyno.fingenes<-cyno.fingenes[,c("Gene","Symbol","gene_id","seqnames","start","end")]
+
+colnames(cyno.fingenes)<-c("Gene","Symbol","RefSeq","Chr","Start","End")
+
+write.table(cyno.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_wg/cyno_gene_data.txt", sep = "\t",quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(cyno.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_gw/cyno_gene_data.txt", sep = "\t",quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(cyno.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_tse/cyno_gene_data.txt", sep = "\t",quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(cyno.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_tse_ffpe/cyno_gene_data.txt", sep = "\t",quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+
+```
+
+# Repeating for mouse
+
+```{r}
+# Creating genomic reference
+gen.mus <- makeTxDbFromGFF("path/Desktop/projects/gtfs/Mus_musculus.GRCm38.99.gtf.gz")
+
+# Getting transcripts from genome
+mus.tx<-genes(gen.mus)
+mus.df <- as.data.frame(mus.tx)
+
+# Get SQL query for genes
+gen.egid <- sql_in_generator(mus.tx$gene_id, quote = T)
+
+# Getting human gene names
+gene.q<-paste0("SELECT
+                    gene.egid,
+                    gene.gnm
+                    FROM gene
+                    WHERE
+                    gene.egid ",gen.egid,";")
+
+genes.mus<-as.data.frame(dbGetQuery(zoomapcon, gene.q))
+colnames(genes.mus)<-c("gene_id","Symbol")
+
+mus.fingenes<-left_join(mus.df,genes.mus, by = "gene_id")
+
+mus.fingenes$Gene <- rownames(mus.fingenes)
+mus.fingenes<-mus.fingenes[,c("Gene","Symbol","gene_id","seqnames","start","end")]
+
+colnames(mus.fingenes)<-c("Gene","Symbol","RefSeq","Chr","Start","End")
+
+write.table(mus.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_wg/mouse_gene_data.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(mus.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_gw/mouse_gene_data.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(mus.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_tse/mouse_gene_data.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```
+
+# Prepping the human genome
+```{r}
+# Creating genomic reference
+gen.human <- makeTxDbFromGFF("path/Desktop/projects/gtfs/Homo_sapiens.GRCh38.99.gtf.gz")
+
+# Getting transcripts from genome
+human.tx<-genes(gen.human)
+human.df <- as.data.frame(human.tx)
+
+# Get SQL query for genes
+gen.egid <- sql_in_generator(human.tx$gene_id, quote = T)
+
+# Getting human gene names
+gene.q<-paste0("SELECT
+                    gene.egid,
+                    gene.gnm
+                    FROM gene
+                    WHERE
+                    gene.egid ",gen.egid,";")
+
+genes.human<-as.data.frame(dbGetQuery(zoomapcon, gene.q))
+colnames(genes.human)<-c("gene_id","Symbol")
+
+human.fingenes<-left_join(human.df,genes.human, by = "gene_id")
+
+human.fingenes$Gene <- rownames(human.fingenes)
+human.fingenes<-human.fingenes[,c("Gene","Symbol","gene_id","seqnames","start","end")]
+
+colnames(human.fingenes)<-c("Gene","Symbol","RefSeq","Chr","Start","End")
+
+write.table(human.fingenes, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/human_tse/human_gene_data.txt", sep = "\t",quote = FALSE, row.names = FALSE, col.names = TRUE)
+```
+
+# Prepping samples
+
+## cyno
+
+```{r}
+redcyno.wg<-as.data.frame(readRDS("data/cynolist_merged_wg.rds"))
+redcyno.gw<-as.data.frame(readRDS("data/cynolist_merged_gw.rds"))
+redcyno.tse<-as.data.frame(readRDS("data/cynolist_merged_tse.rds"))
+redcyno.tse.ffpe<-as.data.frame(readRDS("data/cynolist_merged_tse_ffpe.rds"))
+
+
+# Only taking unique start sites
+redcyno.wg<-unique(redcyno.wg %>% select(dose_group,tissue,set,seqnames,start,end))
+redcyno.gw<-unique(redcyno.gw %>% select(dose_group,tissue,set,seqnames,start,end))
+redcyno.tse<-unique(redcyno.tse %>% select(dose_group,tissue,set,seqnames,start,end))
+redcyno.tse.ffpe<-unique(redcyno.tse.ffpe %>% select(dose_group,tissue,set,seqnames,start,end))
+
+
+redcyno.wg <- redcyno.wg %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:20), "X"))
+
+redcyno.gw <- redcyno.gw %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:20), "X"))
+
+redcyno.tse <- redcyno.tse %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:20), "X"))
+
+redcyno.tse.ffpe <- redcyno.tse.ffpe %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:20), "X"))
+
+write.table(redcyno.wg, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_wg/cyno_wg.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(redcyno.gw, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_gw/cyno_gw.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(redcyno.tse, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_tse/cyno_tse.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+write.table(redcyno.tse.ffpe, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_tse_ffpe/cyno_tse_ffpe.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+# Trying per sample
+# redcyno.tse.ffpe<-as.data.frame(readRDS("data/cynolist_merged_tse_ffpe.rds"))
+# redcyno.tse.ffpe<-unique(redcyno.tse.ffpe %>% select(sample_id,dose_group,tissue,set,seqnames,start,end))
+# 
+# redcyno.tse.ffpe <- redcyno.tse.ffpe %>% 
+#   mutate(dtype = paste(sample_id,dose_group,tissue,set, sep = "_")) %>% 
+#   select(dchr = seqnames,
+#          dsite = start,
+#          dtype) %>% 
+#   filter(dchr %in% c(seq(1:20), "X"))
+# write.table(redcyno.tse.ffpe, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/cyno_tse_ffpe/cyno_tse_ffpe.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```
+
+# mouse
+
+```{r}
+redmus.wg<-as.data.frame(readRDS("data/mouselist_merged_wg.rds"))
+redmus.gw<-as.data.frame(readRDS("data/mouselist_merged_gw.rds"))
+redmus.tse<-as.data.frame(readRDS("data/mouselist_merged_tse.rds"))
+
+# Only taking unique start sites
+redmus.wg<-unique(redmus.wg %>% select(dose_group,tissue,set,seqnames,start,end))
+redmus.gw<-unique(redmus.gw %>% select(dose_group,tissue,set,seqnames,start,end))
+redmus.tse<-unique(redmus.tse %>% select(dose_group,tissue,set,seqnames,start,end))
+
+redmus.wg <- redmus.wg %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:19), "X"))
+
+redmus.gw <- redmus.gw %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:19), "X"))
+
+redmus.tse <- redmus.tse %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:19), "X"))
+
+write.table(redmus.wg, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_wg/mouse_wg.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+write.table(redmus.gw, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_gw/mouse_gw.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+write.table(redmus.tse, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/mouse_tse/mouse_tse.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```
+
+## human
+
+```{r}
+redhuman.tse<-as.data.frame(readRDS("data/humanlist_merged_tse.rds"))
+
+# Only taking unique start sites
+redhuman.tse<-unique(redhuman.tse %>% select(dose_group,tissue,set,seqnames,start,end))
+
+redhuman.tse <- redhuman.tse %>% 
+  mutate(dtype = paste(dose_group,tissue,set, sep = "_")) %>% 
+  select(dchr = seqnames,
+         dsite = start,
+         dtype) %>% 
+  filter(dchr %in% c(seq(1:22), "X"))
+
+write.table(redhuman.tse, "path/Desktop/projects/CompTox_insertmuta_DNA/data/hotspot/human_tse/human_tse.txt", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```

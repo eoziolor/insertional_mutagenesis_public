@@ -1,0 +1,1252 @@
+---
+title: "3.masking.rmd"
+author: "Elias Oziolor"
+date: '2023-01-25'
+output: html_document
+---
+---
+title: "proprietary_masking"
+author: "Elias Oziolor"
+date: '2023-01-04'
+output: html_document
+---
+
+Due to the proprietary nature of the viral construct the following regions will be masked from the raw sequencing data:
+helper sequence, transgene, inter_region_3, inter_region_5, repcap, itr_3_prime, itr_5_prime
+
+# Extracting read info for viral mappings
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.9/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Loop for everything, but septs
+for i in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe\|septs'); do
+
+indir=${parent}/${i}/trimalign_full/full_viral
+
+cd ${indir}
+echo ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+done
+
+# Loop for septs
+for i in $(ls -1 | grep 'septs'); do
+
+indir=${parent}/${i}/trimalign_full/full_viral
+
+cd ${indir}
+echo ${indir}
+
+for f in $(ls -1 *sorted.bam); do
+nam=$(echo $f | sed 's/\_sorted\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+done
+```
+
+# Filtering the resulting txt files to remove reads that map to proprietary portions
+
+
+```{bash}
+# Dirs
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+for i in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+
+indir=${parent}/${i}/trimalign_full/full_viral
+
+cd ${indir}
+echo ${indir}
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep -v 'pxx680_helper\|transgene\|inter_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_filtered.txt
+cat ${nam}_filtered.txt | awk '{print $1}' > ${nam}_filtered_RID.txt
+
+done
+done
+
+########################################
+# Extracting the proprietary reads
+# Dirs
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+for i in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+
+indir=${parent}/${i}/trimalign_full/full_viral
+
+cd ${indir}
+echo ${indir}
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|inter_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+done
+
+```
+
+# Removing select reads from bams
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Everything, but SEPTS
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe\|septs'); do
+
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep -v "sorted" | grep -v "merge*" | grep -v "propreadmask"); do
+nam=$(echo ${i} | sed 's/\.bam//g')
+
+bsub -q medium -app large -J "viral_read_info_extract_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_propriety.log" -e "${indir}/${nam}_propriety.err" \
+    "${my_stools} view -N ${indir}/full_viral/${nam}_vir_reads_info_to_filter_RID.txt -U ${indir}/${nam}_propreadmask.bam -@ 4 -o /dev/null ${indir}/${i}"
+done
+done
+
+# Just for SEPTS
+for j in $(ls -1 | grep 'septs'); do
+
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "sorted" | grep -v "propreadmask"); do
+nam=$(echo ${i} | sed 's/\_sorted\.bam//g')
+
+bsub -q medium -app large -J "viral_read_info_extract_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_propriety.log" -e "${indir}/${nam}_propriety.err" \
+    "${my_stools} view -N ${indir}/full_viral/${nam}_vir_reads_info_to_filter_RID.txt -U ${indir}/${nam}_propreadmask.bam -@ 4 -o /dev/null ${indir}/${i}"
+done
+done
+
+```
+
+# Double checking that those reads don't exist in final product
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Everything, but SEPTS
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe\|septs'); do
+
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask"); do
+nam=$(echo ${i} | sed 's/\.bam//g')
+sample=$(echo ${i} | sed 's/\_propreadmask\.bam//g')
+
+bsub -q medium -app large -J "vir_bleed_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_virbleed.log" -e "${indir}/${nam}_virbleed.err" \
+    "${my_stools} view -N ${indir}/full_viral/${sample}_vir_reads_info_to_filter_RID.txt -o ${indir}/${nam}_virbleed.bam -@ 4 ${indir}/${i}"
+done
+done
+
+# Just for SEPTS
+cd ${parent}
+
+for j in $(ls -1 | grep 'septs'); do
+
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask"); do
+nam=$(echo ${i} | sed 's/\.bam//g')
+sample=$(echo ${i} | sed 's/\_propreadmask\.bam//g')
+
+bsub -q medium -app large -J "vir_bleed_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_virbleed.log" -e "${indir}/${nam}_virbleed.err" \
+    "${my_stools} view -N ${indir}/full_viral/${sample}_vir_reads_info_to_filter_RID.txt -o ${indir}/${nam}_virbleed.bam -@ 4 ${indir}/${i}"
+done
+done
+
+```
+
+# Counting the bleed numbers
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Everything, but SEPTS
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "virbleed"); do
+bleednum=$(${my_stools} view -c ${i})
+printf ${i}\\t${bleednum}\\n >> bleed.tsv
+done
+done
+
+# Reading bleed results
+cd ${parent}
+
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+indir=${parent}/${j}/trimalign_full/
+
+echo ${indir}
+cat ${indir}/bleed.tsv
+
+done
+
+```
+
+# Tabulating omitted reads
+
+```{bash}
+# Tools and dirs
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Everything, but SEPTS
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+indir=${parent}/${j}/trimalign_full/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *propreadmask.bam); do
+sample=$(echo $i | sed 's/\_propreadmask\.bam//g')
+
+mask_num=$(cat ${indir}/full_viral/${sample}_vir_reads_info_to_filter_RID.txt | sort | uniq | wc -l)
+
+printf ${sample}\\t${mask_num}\\n >> ${indir}/masked_num.tsv
+
+done
+done
+
+# Reading bleed results
+cd ${parent}
+
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe'); do
+indir=${parent}/${j}/trimalign_full/
+
+echo ${indir}
+cat ${indir}/masked_num.tsv
+cp ${indir}/masked_num.tsv /path//oziole/CompTox_insertmuta_DNA/extras/for_paper/masking_stats/${j}_masked_num.tsv
+
+done
+```
+
+# Re-alignment on masked reads
+
+## Cyno WG
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=cyno_wg
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq \
+                      -fq2 ${fqdir}/${name}_2.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+## step 3 with full aav_fxn
+############################################################################################
+
+# Files and dirs
+my_step3=/path//scripts/v.int/step3.viralign.sh
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=paired
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running viral alignment
+for f in $(cat $list); do
+bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "/path//scripts/v.int/step3.2.paired.sh \
+    -g ${vir_genome} \
+    -i ${indir} \
+    -e ${suffix} \
+    -o ${indir}/full_viral \
+    -f ${f} >& ${indir}/full_viral/${f}.3.2.txt"
+done
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|intecr_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+
+# Quant
+for i in $(ls -1 *bam); do 
+ 
+ nam=$(echo $i | sed 's/\.bam//g') 
+ printf $i\\n
+ cat ${nam}_vir_reads_info_to_filter.txt | wc -l
+
+done
+
+```
+
+## Cyno TES
+
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=cyno_tes
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq \
+                      -fq2 ${fqdir}/${name}_2.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+## step 3 with full aav_fxn
+############################################################################################
+
+# Files and dirs
+my_step3=/path//scripts/v.int/step3.viralign.sh
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=paired
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running viral alignment
+for f in $(cat $list); do
+bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "/path//scripts/v.int/step3.2.paired.sh \
+    -g ${vir_genome} \
+    -i ${indir} \
+    -e ${suffix} \
+    -o ${indir}/full_viral \
+    -f ${f} >& ${indir}/full_viral/${f}.3.2.txt"
+done
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|intecr_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+
+# Quant
+for i in $(ls -1 *bam); do 
+ 
+ nam=$(echo $i | sed 's/\.bam//g') 
+ printf $i\\n
+ cat ${nam}_vir_reads_info_to_filter.txt | wc -l
+
+done
+```
+
+## Cyno SEPTS
+
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=cyno_septs
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+# Aligning to viral genome
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=single
+
+# Defining tools
+my_bwa=/path//program/bwa-0.7.17/bwa
+my_stools=/path//program/samtools-1.9/samtools
+my_sblaster=/path//program/samblaster/samblaster
+my_bedtools=/path//program/bedtools2/bin/bedtools
+## Here we're using my_clipm to match at least 30 bp of viral sequence
+my_clipm=/path//scripts/v.int/samclip2_Pfmod
+
+# Loading modules for cutadapt
+module load eb/2017  GCC/5.4.0-2.27  OpenMPI/2.0.0 cutadapt/1.9.1-Python-2.7.12
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running alignments
+for f in $(cat $list); do
+    
+    # Defining fastq to use
+    fq1=${f}.${suffix}
+    
+    rg=$(echo \"\@RG\\tID:${f}\\tPL:Illumina\\tPU:x\\tLB:single\\tSM:${f}\")
+    
+    # Running pipeline
+    bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC -m 40 -q 30,30 ${indir}/$fq1 | \
+    ${my_bwa} mem ${vir_genome} -t 4 -R ${rg} - | \
+    ${my_stools} view -h -q 30 -F 4 - | \
+    ${my_clipm} --max 350 --match 30 --ref ${vir_genome} | \
+    ${my_stools} sort -nT ${indir}/full_viral/${f}.prefix.bam - | \
+    ${my_stools} fixmate -m - - | \
+    ${my_stools} sort -T ${indir}/full_viral/${f}.postfix.bam - | \
+    ${my_stools} markdup -r - -O BAM ${indir}/full_viral/${f}.bam"
+done
+
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|inter_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+
+```
+
+## Mouse WG
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=mouse_wg
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq \
+                      -fq2 ${fqdir}/${name}_2.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+## step 3 with full aav_fxn
+############################################################################################
+
+# Files and dirs
+my_step3=/path//scripts/v.int/step3.viralign.sh
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=paired
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running viral alignment
+for f in $(cat $list); do
+bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "/path//scripts/v.int/step3.2.paired.sh \
+    -g ${vir_genome} \
+    -i ${indir} \
+    -e ${suffix} \
+    -o ${indir}/full_viral \
+    -f ${f} >& ${indir}/full_viral/${f}.3.2.txt"
+done
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|intecr_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+
+# Quant
+for i in $(ls -1 *bam); do 
+ 
+ nam=$(echo $i | sed 's/\.bam//g') 
+ printf $i\\n
+ cat ${nam}_vir_reads_info_to_filter.txt | wc -l
+
+done
+
+
+```
+
+## Mouse TES
+
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=mouse_tes
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq \
+                      -fq2 ${fqdir}/${name}_2.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+## step 3 with full aav_fxn
+############################################################################################
+
+# Files and dirs
+my_step3=/path//scripts/v.int/step3.viralign.sh
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=paired
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running viral alignment
+for f in $(cat $list); do
+bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "/path//scripts/v.int/step3.2.paired.sh \
+    -g ${vir_genome} \
+    -i ${indir} \
+    -e ${suffix} \
+    -o ${indir}/full_viral \
+    -f ${f} >& ${indir}/full_viral/${f}.3.2.txt"
+done
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|intecr_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+
+# Quant
+for i in $(ls -1 *bam); do 
+ 
+ nam=$(echo $i | sed 's/\.bam//g') 
+ printf $i\\n
+ cat ${nam}_vir_reads_info_to_filter.txt | wc -l
+
+done
+```
+
+## Mouse SEPTS
+
+```{bash}
+############################################################################################
+# Setting up directories
+############################################################################################
+
+# Directories
+parent=/path//insert_muta/vi_paper/
+project=mouse_septs
+cd ${parent}/${project}
+
+
+############################################################################################
+# Restoring raw fastqs for masked reads
+############################################################################################
+
+# location
+mkdir -p ${parent}/${project}/masked_raw_fastq_restore/
+
+fqdir=${parent}/${project}/masked_raw_fastq_restore/
+
+cd ${parent}/${project}/trimalign_full/
+
+# programs
+my_stools=/path//program/samtools-1.9/samtools
+my_bedtools=/path//program/bedtools2/bin/bedtools
+
+# First set is for general use, second loop is for samples that failed due to time
+#for i in $(ls -1 *.bam); do
+#name=$(echo $i | sed 's/\.bam//g')
+
+
+for i in $(ls -1 *propreadmask.bam); do
+name=$(echo $i | sed 's/\.bam//g')
+
+bsub -q long -app large -J "bed2fastq ${i}" -n 8,8 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${fqdir}/${i}_b2fq.log" -e "${fqdir}/${i}_b2fq.err" \
+    "${my_stools} sort -@ 8 -n -T sorting_${name} ${parent}/${project}/trimalign_full/$i |\
+    ${my_bedtools} bamtofastq -i - \
+                      -fq ${fqdir}/${name}_1.fq"
+done
+
+cd ${fqdir}
+
+############################################################################################
+# Aligning to viral genome
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/
+suffix=fq
+vir_genome=${parent}/${project}/viral_genome/${project}_viral_genome.fa
+reads=single
+
+# Defining tools
+my_bwa=/path//program/bwa-0.7.17/bwa
+my_stools=/path//program/samtools-1.9/samtools
+my_sblaster=/path//program/samblaster/samblaster
+my_bedtools=/path//program/bedtools2/bin/bedtools
+## Here we're using my_clipm to match at least 30 bp of viral sequence
+my_clipm=/path//scripts/v.int/samclip2_Pfmod
+
+# Loading modules for cutadapt
+module load eb/2017  GCC/5.4.0-2.27  OpenMPI/2.0.0 cutadapt/1.9.1-Python-2.7.12
+
+# Making the new full viralign diractory
+mkdir -p ${indir}/full_viral/
+
+# Creating a list
+cd $indir
+
+if [ "$reads" == "paired" ]; then
+  ls -1 *${suffix} | sed -e "s/\_1.*//g" | sed -e "s/\_2.*//g" |  uniq > $indir/sample_list.txt
+  else
+  ls -1 *${suffix} | sed "s/\.$suffix//g" | uniq > $indir/sample_list.txt
+fi
+
+list=$indir/sample_list.txt
+
+# Running alignments
+for f in $(cat $list); do
+    
+    # Defining fastq to use
+    fq1=${f}.${suffix}
+    
+    rg=$(echo \"\@RG\\tID:${f}\\tPL:Illumina\\tPU:x\\tLB:single\\tSM:${f}\")
+    
+    # Running pipeline
+    bsub -q medium -app large -J "v.int.viralign-${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${f}.v.int.viralign.log" -e "${indir}/full_viral/${f}.v.int.viralign.err" \
+    "cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC -m 40 -q 30,30 ${indir}/$fq1 | \
+    ${my_bwa} mem ${vir_genome} -t 4 -R ${rg} - | \
+    ${my_stools} view -h -q 30 -F 4 - | \
+    ${my_clipm} --max 350 --match 30 --ref ${vir_genome} | \
+    ${my_stools} sort -nT ${indir}/full_viral/${f}.prefix.bam - | \
+    ${my_stools} fixmate -m - - | \
+    ${my_stools} sort -T ${indir}/full_viral/${f}.postfix.bam - | \
+    ${my_stools} markdup -r - -O BAM ${indir}/full_viral/${f}.bam"
+done
+
+############################################################################################
+# Extracting read info
+############################################################################################
+# Files and dirs
+indir=${parent}/${project}/masked_raw_fastq_restore/full_viral/
+my_stools=/path//program/samtools-1.9/samtools
+
+cd ${indir}
+
+for f in $(ls -1 *bam); do
+nam=$(echo $f | sed 's/\.bam//g')
+bsub -q express -app large -J "viral_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.vir_read_info_extract.log" -e "${indir}/mate/${nam}.vir_read_info_extract.err" \
+    "${my_stools} view ${indir}/${f} | cut -f 1,3,4,6,9 | sort | uniq > ${indir}/${nam}_vir_reads_info.txt"
+done
+
+# How many map to undesired regions
+
+for g in $(ls -1 *_vir_reads_info.txt); do
+
+nam=$(echo $g | sed 's/\.txt//g')
+
+cat ${g} | grep 'pxx680_helper\|transgene\|inter_region_3\|inter_region_5\|repcap\|itr_3_prime\|itr_5_prime' > ${nam}_to_filter.txt
+cat ${nam}_to_filter.txt | awk '{print $1}' > ${nam}_to_filter_RID.txt
+
+done
+```
+
+# Removing second round
+
+## Removing select reads from bams
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# WG
+for j in $(ls -1 | grep 'wg'); do
+
+indir=${parent}/${j}/trimalign_full/
+outdir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask.bam"); do
+nam=$(echo ${i} | sed 's/\_propreadmask\.bam//g')
+
+bsub -q medium -app large -J "viral_read_info_extract_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${outdir}/${nam}_propriety2.log" -e "${outdir}/${nam}_propriety2.err" \
+    "${my_stools} view -N ${outdir}/full_viral/${nam}_propreadmask_vir_reads_info_to_filter_RID.txt -U ${outdir}/${nam}_propreadmask2.bam -@ 4 -o /dev/null ${indir}/${i}"
+done
+done
+
+# TES
+for j in $(ls -1 | grep 'tes'); do
+
+indir=${parent}/${j}/trimalign_full/
+outdir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask.bam"); do
+nam=$(echo ${i} | sed 's/\_propreadmask\.bam//g')
+
+bsub -q medium -app large -J "viral_read_info_extract_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${outdir}/${nam}_propriety2.log" -e "${outdir}/${nam}_propriety2.err" \
+    "${my_stools} view -N ${outdir}/full_viral/${nam}_propreadmask_vir_reads_info_to_filter_RID.txt -U ${outdir}/${nam}_propreadmask2.bam -@ 4 -o /dev/null ${indir}/${i}"
+done
+done
+
+```
+
+## Checking removal #2
+
+### Double checking that those reads don't exist in final product
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# Cyno TES
+for j in $(ls -1 | grep 'wg'); do
+
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask2"); do
+nam=$(echo ${i} | sed 's/2\.bam//g')
+sample=$(echo ${i} | sed 's/\_propreadmask2\.bam//g')
+
+bsub -q medium -app large -J "vir_bleed_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_virbleed.log" -e "${indir}/${nam}_virbleed.err" \
+    "${my_stools} view -N ${indir}/full_viral/${sample}_propreadmask_vir_reads_info_to_filter_RID.txt -o ${indir}/${nam}_virbleed.bam -@ 4 ${indir}/${i}"
+done
+done
+
+# Cyno TES
+for j in $(ls -1 | grep 'tes'); do
+
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "propreadmask2"); do
+nam=$(echo ${i} | sed 's/2\.bam//g')
+sample=$(echo ${i} | sed 's/\_propreadmask2\.bam//g')
+
+bsub -q medium -app large -J "vir_bleed_${nam}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}_virbleed.log" -e "${indir}/${nam}_virbleed.err" \
+    "${my_stools} view -N ${indir}/full_viral/${sample}_propreadmask_vir_reads_info_to_filter_RID.txt -o ${indir}/${nam}_virbleed.bam -@ 4 ${indir}/${i}"
+done
+done
+
+```
+
+### Counting the bleed numbers
+
+```{bash}
+# Tools and dirs
+my_stools=/path//program/samtools-1.16.1/samtools
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# TES
+for j in $(ls -1 | grep 'wg'); do
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "virbleed"); do
+bleednum=$(${my_stools} view -c ${i})
+printf ${i}\\t${bleednum}\\n >> bleed.tsv
+done
+done
+
+# TES
+for j in $(ls -1 | grep 'tes'); do
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *bam | grep "virbleed"); do
+bleednum=$(${my_stools} view -c ${i})
+printf ${i}\\t${bleednum}\\n >> bleed.tsv
+done
+done
+
+```
+
+### Tabulating omitted reads
+
+```{bash}
+# Tools and dirs
+parent=/path//insert_muta/vi_paper/
+
+cd ${parent}
+
+# TES
+for j in $(ls -1 | grep 'tes'); do
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+cd ${indir}
+echo ${indir}
+
+for i in $(ls -1 *propreadmask2.bam); do
+sample=$(echo $i | sed 's/\_propreadmask2\.bam//g')
+
+mask_num=$(cat ${indir}/full_viral/${sample}_propreadmask_vir_reads_info_to_filter_RID.txt | sort | uniq | wc -l)
+
+printf ${sample}\\t${mask_num}\\n >> ${indir}/masked_num.tsv
+
+done
+done
+
+# Reading bleed results
+cd ${parent}
+
+for j in $(ls -1 | grep -v 'swap\|illum\|hth\|ffpe\|septs'); do
+indir=${parent}/${j}/trimalign_full/
+
+echo ${indir}
+cat ${indir}/masked_num.tsv
+cp ${indir}/masked_num.tsv /path//oziole/CompTox_insertmuta_DNA/extras/for_paper/masking_stats/${j}_masked_num.tsv
+
+indir=${parent}/${j}/masked_raw_fastq_restore/
+echo ${indir}
+cat ${indir}/masked_num.tsv
+cp ${indir}/masked_num.tsv /path//oziole/CompTox_insertmuta_DNA/extras/for_paper/masking_stats/${j}_masked_num.tsv
+
+done
+```
+
+# Moving files for sharing
+
+```{bash}
+# Tools and dirs
+parent=/path//insert_muta/vi_paper/
+offspring=${parent}/files/
+
+mkdir -p ${offspring}
+
+cd ${parent}
+
+# WG/TES
+for j in $(ls -1 | grep 'wg\|tes' | grep -v 'ffpe\|hth\|illum\|swap'); do
+
+# Adding method to file
+addition=$(echo $j | sed 's/cyno\_//g' | sed 's/mouse\_//g')
+
+indir=${parent}/${j}/masked_raw_fastq_restore/
+
+
+echo ${indir}
+cd ${indir}
+
+for i in $(ls -1 *propreadmask*.bam | grep -v "virbleed"); do
+sample=$(echo $i | sed 's/\.bam//g')
+
+ln -s ${indir}/${i} ${offspring}/${sample}_${addition}.bam
+
+done
+done
+
+# SEPTS
+cd ${parent}
+
+for j in $(ls -1 | grep 'septs' | grep -v 'ffpe\|hth\|illum\|swap'); do
+
+# Adding method to file
+addition=$(echo $j | sed 's/cyno\_//g' | sed 's/mouse\_//g')
+
+indir=${parent}/${j}/trimalign_full/
+
+
+echo ${indir}
+cd ${indir}
+
+for i in $(ls -1 *propreadmask*.bam | grep -v "virbleed"); do
+sample=$(echo $i | sed 's/\.bam//g')
+
+ln -s ${indir}/${i} ${offspring}/${sample}_${addition}.bam
+
+done
+done
+
+```

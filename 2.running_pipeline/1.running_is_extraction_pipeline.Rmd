@@ -1,0 +1,1267 @@
+---
+title: "running_is_extraciton_pipeline"
+author: "Elias Oziolor"
+date: '2022-09-07'
+output: html_document
+---
+
+# Downloading and building index for cyno genome
+
+```{bash}
+parent=/path-to-parent
+mkdir -p $parent
+
+cd $parent
+
+wget ftp://ftp.ensembl.org/pub/release-99/fasta/macaca_fascicularis/dna/Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.fa.gz
+wget ftp://ftp.ensembl.org/pub/release-99/gtf/macaca_fascicularis/Macaca_fascicularis.Macaca_fascicularis_5.0.99.gtf.gz
+
+# Unzipping
+gunzip Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.fa.gz
+gunzip Macaca_fascicularis.Macaca_fascicularis_5.0.99.gtf.gz
+
+# Indexing with bowtie2
+
+bsub -q medium -app large -J "index" -n 16,16 -M 64GB -R "span[hosts=1] rusage[mem=64GB]" -o "${parent}/btie_index.log" -e "${parent}/btie_index.err" \
+"/path-to-program/bowtie2-2.2.4/bowtie2-build \
+Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.fa \
+Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.genome"
+
+# Indexing with bwa
+bsub -q medium -app large -J "bwa_index" -n 16,16 -M 64GB -R "span[hosts=1] rusage[mem=64GB]" -o "${parent}/bwa_index.log" -e "${parent}/bwa_index.err" \
+"/path-to-program/bwa-0.7.17/bwa index \
+Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.fa "
+
+```
+
+# Downloading and building index for mouse genome
+
+```{bash}
+parent=/path-to-parent
+mkdir -p $parent
+
+cd $parent
+
+wget ftp://ftp.ensembl.org/pub/release-99/fasta/mus_musculus/dna/Mus_musculus*.dna.toplevel.fa.gz
+wget ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus*99.gtf.gz
+
+# Unzipping
+gunzip *.gz
+
+# Indexing with bwa
+bsub -q medium -app large -J "bwa_index" -n 16,16 -M 64GB -R "span[hosts=1] rusage[mem=64GB]" -o "${parent}/bwa_index.log" -e "${parent}/bwa_index.err" \
+"/path-to-program/bwa-0.7.17/bwa index \
+/path-to-base/insert_muta/mouse/genome/Mus_musculus.GRCm38.dna.toplevel.fa "
+
+# Samtools index
+my_stools=/path-to-program/samtools-1.9/samtools
+
+bsub -q medium -app large -J "stools_index" -n 16,16 -M 64GB -R "span[hosts=1] rusage[mem=64GB]" -o "${parent}/stools_index.log" -e "${parent}/stools_index.err" \
+"$my_stools faidx \
+/path-to-base/insert_muta/mouse/genome/Mus_musculus.GRCm38.dna.toplevel.fa "
+
+```
+
+## Cyno TSE
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno_tse/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/cyno_tse/trimalign \
+-g cyno
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno_tse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step4
+/path-to-base/scripts/v.int/step4.count.sh \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_tse/trimalign
+
+# cyno tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno_tse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_tes
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## Cyno WG
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno/raw_fastq \
+-e fastq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/cyno/trimalign \
+-g cyno
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno/raw_fastq \
+-e fastq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Submitting for cyno wg
+/path-to-base/scripts/v.int/step4.count.sh \
+-g cyno \
+-i /path-to-base/insert_muta/cyno/trimalign
+
+# cyno tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_wg
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## Cyno FFPE TSE
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno_ffpe_tse/trimalign \
+-f
+
+# Step 2 - only because running other jobs
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/trimalign \
+-g cyno
+
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno_ffpe_tse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step 4
+/path-to-base/scripts/v.int/step4.count.sh \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/trimalign \
+-g cyno
+
+# Counts table
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_ffpe_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno_ffpe_tse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_tes_ffpe
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## Cyno GW
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_gw/raw_fastq \
+-e fq.gz \
+-r single \
+-o /path-to-base/insert_muta/cyno_gw/trimalign \
+-w
+
+# Submitting cyno gw
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_gw/raw_fastq \
+-e fq.gz \
+-r single \
+-m /path-to-base/insert_muta/cyno_gw/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa \
+-w
+
+## filtering, merging and re-sorting
+parent=/path-to-base/insert_muta/cyno_gw/trimalign/full_viral
+my_stools=/path-to-program/samtools-1.9/samtools
+my_clipm=/path-to-base/scripts/v.int/samclip2_Pfmod
+my_gen=/path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+cd $parent
+
+rm *merged*
+rm *sorted*
+
+for i in $(ls -1 *bam | sed 's/\..*//g' | sort | uniq); do
+
+list=$(ls -1 $i*bam)
+
+$my_stools merge -f ${i}_merged.bam $list
+
+$my_stools view -h ${i}_merged.bam |\
+$my_clipm \
+--max 350 \
+--match 30 \
+--ref $my_gen |\
+$my_stools sort > ${i}_sorted.bam
+
+done
+
+
+# Counts table
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_gw/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *sorted.bam); do
+nam=$(echo ${f} | sed 's/\_sorted\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Read info extraction
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_gw/trimalign
+
+## Extracting softclips
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *sorted.bam); do
+
+nam=$(echo $f | sed 's/\_sorted\.bam//g')
+
+bsub -q express -app large -J "vir_orig_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${nam}.vir_read_info.log" -e "${indir}/full_viral/${nam}.vir_read_info.err" \
+    "${my_stools} view ${indir}/full_viral/${f} | cut -f 1,3,4,6 | sort | uniq > ${indir}/full_viral/${nam}_unaligned_mapped_filtered_reads_info.txt"
+done
+
+## Host
+cd ${indir}
+
+for f in $(ls -1 *sorted.bam); do
+
+nam=$(echo $f | sed 's/\_sorted\.bam//g')
+
+bsub -q express -app large -J "host_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.host_read_info_extract.log" -e "${indir}/${nam}.host_read_info_extract.err" \
+    "${my_stools} view ${indir}/${nam}_sorted.bam | cut -f 1,3,4,6 | sort | uniq > ${indir}/${nam}_reads_info.txt"
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno_gw/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_septs
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/full_viral/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cd ${indir}/full_viral
+
+for f in $(ls -1 *sorted.bam); do
+
+  nam=$(echo $f | sed 's/\_sorted\.bam//g')
+  cp ${indir}/full_viral/${nam}_sorted.bam ${outdir}/${outfix}/vir_orig/${nam}_unaligned_mapped_filtered.bam
+
+done
+
+
+```
+
+## Mouse TSE
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g mouse \
+-i /path-to-base/insert_muta/mouse_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-o /path-to-base/insert_muta/mouse_tse/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/mouse_tse/trimalign \
+-g mouse
+
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/mouse_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-m /path-to-base/insert_muta/mouse_tse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step 4 Submitting for mouse tes
+/path-to-base/scripts/v.int/step4.count.sh \
+-i /path-to-base/insert_muta/mouse_tse/trimalign \
+-g mouse
+
+# mouse tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/mouse_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/mouse_tse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=mouse_tes
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## Mouse WG
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g mouse \
+-i /path-to-base/insert_muta/mouse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-o /path-to-base/insert_muta/mouse/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/mouse/trimalign \
+-g mouse
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/mouse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-m /path-to-base/insert_muta/mouse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Submitting for mouse tes
+/path-to-base/scripts/v.int/step4.count.sh \
+-i /path-to-base/insert_muta/mouse/trimalign \
+-g mouse
+
+# mouse tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/mouse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/mouse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=mouse_wg
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## mouse GW
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g mouse \
+-i /path-to-base/insert_muta/mouse_gw/raw_fastq \
+-e fastq.gz \
+-r single \
+-o /path-to-base/insert_muta/mouse_gw/trimalign \
+-w
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/mouse_gw/trimalign \
+-g mouse
+
+## filtering, merging and re-sorting
+parent=/path-to-base/insert_muta/mouse_gw/trimalign/
+my_stools=/path-to-program/samtools-1.9/samtools
+my_clipm=/path-to-base/scripts/v.int/samclip2_Pfmod
+my_gen=/path-to-base/insert_muta/mouse/genome/Mus_musculus.GRCm38.dna.toplevel.fa
+
+cd $parent
+
+rm *merged*
+rm *sorted*
+
+for i in $(ls -1 *bam | sed 's/\..*//g' | sort | uniq); do
+
+list=$(ls -1 $i*bam)
+
+$my_stools merge -f ${i}_merged.bam $list
+
+$my_stools view -h ${i}_merged.bam |\
+$my_clipm \
+--max 350 \
+--match 30 \
+--ref $my_gen |\
+$my_stools sort > ${i}_sorted.bam
+
+done
+
+# Submitting mouse gw
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh
+
+$my_step3 \
+-i /path-to-base/insert_muta/mouse_gw/raw_fastq \
+-e fastq.gz \
+-r single \
+-m /path-to-base/insert_muta/mouse_gw/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa \
+-w
+
+## filtering, merging and re-sorting
+parent=/path-to-base/insert_muta/mouse_gw/trimalign/full_viral
+my_stools=/path-to-program/samtools-1.9/samtools
+my_clipm=/path-to-base/scripts/v.int/samclip2_Pfmod
+my_gen=/path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+cd $parent
+
+rm *merged*
+rm *sorted*
+
+for i in $(ls -1 *bam | sed 's/\..*//g' | sort | uniq); do
+
+list=$(ls -1 $i*bam)
+
+$my_stools merge -f ${i}_merged.bam $list
+
+$my_stools view -h ${i}_merged.bam |\
+$my_clipm \
+--max 350 \
+--match 30 \
+--ref $my_gen |\
+$my_stools sort > ${i}_sorted.bam
+
+done
+
+# Counts table
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/mouse_gw/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *sorted.bam); do
+nam=$(echo ${f} | sed 's/\_sorted\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Read info extraction
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/mouse_gw/trimalign
+
+## Extracting softclips
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *sorted.bam); do
+
+nam=$(echo $f | sed 's/\_sorted\.bam//g')
+
+bsub -q express -app large -J "vir_orig_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/full_viral/${nam}.vir_read_info.log" -e "${indir}/full_viral/${nam}.vir_read_info.err" \
+    "${my_stools} view ${indir}/full_viral/${f} | cut -f 1,3,4,6 | sort | uniq > ${indir}/full_viral/${nam}_unaligned_mapped_filtered_reads_info.txt"
+done
+
+## Host
+cd ${indir}
+
+for f in $(ls -1 *sorted.bam); do
+
+nam=$(echo $f | sed 's/\_sorted\.bam//g')
+
+bsub -q express -app large -J "host_read_info_extract_${f}" -n 4,4 -M 16GB -R "span[hosts=1] rusage[mem=16GB]" \
+    -o "${indir}/${nam}.host_read_info_extract.log" -e "${indir}/${nam}.host_read_info_extract.err" \
+    "${my_stools} view ${indir}/${nam}_sorted.bam | cut -f 1,3,4,6 | sort | uniq > ${indir}/${nam}_reads_info.txt"
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/mouse_gw/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=mouse_septs
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/full_viral/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cd ${indir}/full_viral
+
+for f in $(ls -1 *sorted.bam); do
+
+  nam=$(echo $f | sed 's/\_sorted\.bam//g')
+  cp ${indir}/full_viral/${nam}_sorted.bam ${outdir}/${outfix}/vir_orig/${nam}_unaligned_mapped_filtered.bam
+
+done
+
+
+```
+
+## human TSE
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g human \
+-i /path-to-base/insert_muta/human_lv_tse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-o /path-to-base/insert_muta/human_lv_tse/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/human_lv_tse/trimalign \
+-g human
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/human_lv_tse/raw_fastq \
+-e fastq.gz \
+-r paired \
+-m /path-to-base/insert_muta/human_lv_tse/trimalign \
+-v /path-to-base/insert_muta/lv/lv_nofxn/lv_nofxn.fa
+
+# Submitting for human tes
+/path-to-base/scripts/v.int/step4.count.sh \
+-i /path-to-base/insert_muta/human_lv_tse/trimalign \
+-g human
+
+# human tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/human_lv_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+```
+
+## Cyno FFPE TSE subsampling
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/raw_fastq_sub \
+-e fastq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub \
+-f
+
+# Step 2 - only because running other jobs
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+  -i /path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub \
+  -g cyno >& /path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub/err2.txt
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/raw_fastq_sub \
+-e fastq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step 4
+/path-to-base/scripts/v.int/step4.count.sh \
+-i /path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub \
+-g cyno
+
+# Counts table
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_ffpe_tse/trimalign_sub
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+```
+
+# Head to head FF to FFPE
+
+## Renaming files
+
+```{bash}
+parent=/path-to-base/20ITox025.TES.Target.Enrichment/FXN/8.Samples.FFPE.FF.VC.VCAAVDNA.FXN.April.2021
+offspring=/path-to-base/insert_muta/cyno_hth_tse/raw_fastq
+
+mkdir -p ${offspring}
+
+# specifying list and conv to unix
+list=${offspring}/hth_conv.csv
+dos2unix ${list}
+
+cd ${parent}
+
+for i in $(ls -1 *fastq.gz | sed 's/\.fastq\.gz//g'); do
+
+# Identifying storage
+stor=$(echo $i | sed 's/FFPE.*/PE/g' | sed 's/FF.*/FF/g')
+
+# Identifying read
+rd=$(echo $i | sed 's/.*R1/1/g' | sed 's/.*R2/2/g')
+
+# Identifying animal
+anim=$(echo $i | sed 's/FFPE//g' | sed 's/FF//g' | sed 's/HDG.*//g' | sed 's/VehCtrl//g' | sed 's/R.*//g' | sed 's/plus.*//g'  | sed 's/19/9/g' | sed 's/09/9/g'  | sed 's/02/2/g')
+
+# Identifying extras
+extra=$(echo $i | sed 's/FFPE.*//g' | sed 's/FFVehCtrl02//g' | sed 's/FF.*//g' | sed 's/R.*//g' | sed 's/plus.*/spike/g')
+
+# List match
+lmatch=$(echo $i | sed 's/R1.*//g' | sed 's/R2.*//g')
+
+# Animal id
+anid=$(cat ${list} | tr ',' '\t' | grep -w $lmatch | awk '{print $2}')
+
+# Echoing
+echo $i
+printf "storage is ${stor}\n"
+printf "read is ${rd}\n"
+printf "animal is ${anim}\n"
+printf "extra is ${extra}\n"
+printf "lmatch is ${lmatch}\n"
+printf "lmatch is ${anid}\n"
+printf "final file is ${anid}${extra}_${stor}_R${rd}.fq.gz\n\n"
+
+# Linking
+ln -s ${parent}/${i}.fastq.gz ${offspring}/${anid}${extra}_${stor}_${rd}.fq.gz
+
+done
+
+cd ${offspring}
+
+```
+
+## Cyno hth TSE
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_hth_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno_hth_tse/trimalign \
+-f
+
+# Step 2 modified
+/path-to-base/scripts/v.int/step2.ms.extract.sh \
+-i /path-to-base/insert_muta/cyno_hth_tse/trimalign  \
+-g cyno
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_hth_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno_hth_tse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step4
+/path-to-base/scripts/v.int/step4.count.sh \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_hth_tse/trimalign
+
+# cyno tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_hth_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno_hth_tse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_tes_hth
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+## Cyno swap TSE
+
+Renaming original files
+
+```{bash}
+parent=/path-to-base/20ITox025.TES.Target.Enrichment/FXN/Agilent.TES.FF.FFPE.Comp.Oct292021
+offspring=/path-to-base/insert_muta/cyno_swap_tse/raw_fastq
+list=/path-to-base/insert_muta/cyno_swap_tse/raw_fastq/cyno_swap_conv.csv
+
+dos2unix $list
+
+cd $parent
+
+# Renaming
+for i in $(ls -1 *fastq.gz); do
+
+newnam=$(cat $list | grep $i | tr ',' '\t' | awk '{print $2}')
+
+printf "${i}\t${newnam}\n"
+
+ln -s ${parent}/${i} ${offspring}/${newnam}.fq.gz
+
+done
+
+cd $offspring
+
+ls -lhrt
+
+```
+
+```{bash}
+my_step1=/path-to-base/scripts/v.int/step1.trimalign.sh
+
+# Steps 1-2
+$my_step1 \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_swap_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-o /path-to-base/insert_muta/cyno_swap_tse/trimalign \
+-f
+
+# Step 2 modified
+#/path-to-base/scripts/v.int/step2.ms.extract.sh \
+#-i /path-to-base/insert_muta/cyno_swap_tse/trimalign  \
+#-g cyno
+
+# Step 3
+my_step3=/path-to-base/scripts/v.int/step3.viralign.sh 
+
+$my_step3 \
+-i /path-to-base/insert_muta/cyno_swap_tse/raw_fastq \
+-e fq.gz \
+-r paired \
+-m /path-to-base/insert_muta/cyno_swap_tse/trimalign \
+-v /path-to-base/insert_muta/aav/aav.nofxn.hardmask/aav_nofxn_hardmask.fa
+
+# Step4
+/path-to-base/scripts/v.int/step4.count.sh \
+-g cyno \
+-i /path-to-base/insert_muta/cyno_swap_tse/trimalign
+
+# cyno tes
+my_stools=/path-to-program/samtools-1.9/samtools
+indir=/path-to-base/insert_muta/cyno_swap_tse/trimalign
+
+#extracting total viral reads from full_viral directory
+cd ${indir}/full_viral/
+
+for f in $(ls -1 *.bam); do
+nam=$(echo ${f} | sed 's/\.bam//g')
+
+hseqs=$(${my_stools} view ${indir}/${nam}_sorted.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+vseqs=$(${my_stools} view ${indir}/full_viral/${nam}.bam | awk '{print $6}' | sed 's/\([[:digit:]]\+M\).*/\1/g' | sed 's/.*[S|H]\([[:digit:]]\+M\)/\1/g' | sed 's/M//g' | awk '$1>=30' | wc -l)
+printf "${nam}\t${hseqs}\t${vseqs}\n" >> ${indir}/counts.tsv
+    
+done
+
+# Moving to analysis
+
+## sorted IS files to secondary analysis
+indir=/path-to-base/insert_muta/cyno_swap_tse/trimalign
+outdir=/path-to-base/oziole/CompTox_insertmuta_DNA/data/
+outfix=cyno_tes_swap
+
+cd ${indir}
+mkdir -p ${outdir}/${outfix}/is
+
+cp ${indir}/*sorted.bam ${outdir}/${outfix}/is/
+
+## Read info
+
+# Moving viral info reads
+mkdir -p ${outdir}/${outfix}/reads_info
+cp ${indir}/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/mate/*reads_info.txt ${outdir}/${outfix}/reads_info
+cp ${indir}/softclip/*reads_info.txt ${outdir}/${outfix}/reads_info
+
+## Vir origins
+mkdir -p ${outdir}/${outfix}/vir_orig/
+
+cp ${indir}/mate/*unaligned_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+cp ${indir}/softclip/*softclipped_mapped_filtered.bam ${outdir}/${outfix}/vir_orig/
+
+```
+
+# Hardmask homology regions
+
+Starting a re-run of the pipeline (steps 3&4 with hardmasked AAV genome for high homology regions).The below shows how we've chosen regions of high homology to mask.
+
+```{r}
+# Mark Gosink, Ph.D.
+# Global Pathology & Investigative Toxicology
+# Pfizer Inc.
+# 
+# Created:  Wed Feb 23 09:45:02 2022
+# Function: Run bwa viral vector sequences against genomic
+#   sequences to identify vector sequences with regions
+#   of genomic similarity; for use in IS masking
+
+library(data.table)
+library(tidyverse)
+library(Biostrings)
+
+# Identify genome & vector to compare ####
+# Designate the vector sequence(s) to analyze
+vector_dir <- "/path-to-base/insert_muta/mouse_galt/viral_genome/"
+# input_fasta <- "aav.repcap.fa"
+# input_fasta <- "aav_human_packaging.fa"
+# input_fasta <- "AAV8-CAG-h-GALT_plasmid.fa"
+# input_fasta <- "CD822A-1_LuRian_sequence.v2.fa"
+# input_fasta <- "lenti_ITR_ITR.fasta"
+#input_fasta <- "mouse_crispr_viral_genome.fa"
+
+input_fasta <- "mouse_galt_viral_genome.fa"
+input_fasta <- paste0(vector_dir,input_fasta)
+
+# Designate the genome against which to compare
+# bwadb_genome <- "Macaca_fascicularis.Macaca_fascicularis_5.0.dna.toplevel.fa"
+bwa_genome <- "/path-to-base/insert_muta/mouse/genome/Mus_musculus.GRCm38.dna.toplevel.fa"
+
+# Set the parameters for masking ####
+mapq_threshold <- 30
+oligo_size <- 150
+
+# path to bwa command
+bwapcmd <- "/path-to-program/bwa-0.7.17/bwa"
+
+# Determine the sequence length of the input vector(s)
+seq_lengths <- fasta.seqlengths(input_fasta)
+seq_names <- names(seq_lengths)
+new_seq_names <- c()
+for (nm in seq_names) {
+  new_nm <- gsub("^(\\S+)\\s+.+", "\\1", nm, perl = TRUE)
+  new_seq_names <- c(new_seq_names, new_nm)
+}
+names(seq_lengths) <- new_seq_names
+
+# Gather vector sequences ####
+Seqs <- list()
+all_lines <- readLines(input_fasta)
+for (i in 1:length(all_lines)) {
+  if (grepl("^>", all_lines[i])) {
+    cur_nm <- gsub("^(\\S+)\\s+.+", "\\1", all_lines[i], perl = TRUE)
+    cur_nm <- gsub(">", "", cur_nm)
+  } else {
+    Seqs[cur_nm] <- paste0(Seqs[cur_nm], all_lines[i])
+  }
+}
+# Split the individual fasta seqs into oligos of length "oligo_size" ####
+process_id = Sys.getpid()
+frags_tfa_file = paste0(process_id, '_frags.tfa')
+outfile <- file(frags_tfa_file, open = "wt")
+for (cur_nm in new_seq_names) {
+  cur_seq <- Seqs[cur_nm]
+  cur_seq <- gsub("^NULL", "", cur_seq)
+  Residues <- unlist(strsplit(cur_seq,""))
+  # Create a fasta file of oligo fragments
+  count = 1
+  for (idx in 1:(length(Residues)-oligo_size+1)) {
+    frag_name <- paste0('frag_', cur_nm, "_", count)
+    frag_region <- paste0(idx, "..", (idx+oligo_size-1))
+    frag_seq <- paste0(Residues[idx:(idx+oligo_size-1)], collapse = "")
+    writeLines(paste0(">", frag_name, " ", frag_region), outfile)
+    writeLines(paste0(frag_seq), outfile)
+    count <- count + 1
+  }
+}
+close(outfile)
+
+#	Unique file names for temporary files so multiple instances can run simultaneously
+bwa_res_file = paste0(process_id, '.bwa_results')
+
+# Run bwa on the oligo seqs ####
+cmd <- paste0(bwapcmd, ' mem ', bwa_genome, ' ', frags_tfa_file, ' > ', bwa_res_file)
+#cmd <- paste0(bwapcmd, ' mem -T ', min_score, ' ', bwa_genome, ' ', frags_tfa_file, ' > ', bwa_res_file)
+print(cmd)
+if (system(cmd)) { q(save = "default", status = 1, runLast = FALSE) }
+
+# Parse the bwa results ####
+SeqHits <- data.table()
+res_lines <- readLines(bwa_res_file)
+curr_loc <- 0
+# Compile a list of all the vector oligos mapping to the genome ####
+for (i in 1:length(res_lines)) {
+  if (grepl("^\\@", res_lines[i])) { next } # skip the header section
+  Vals <- str_split(res_lines[i], "\\s")
+  genome_chr <- Vals[[1]][3]
+  genome_loc <- Vals[[1]][4]
+  mapq <- Vals[[1]][5]
+  if (mapq < mapq_threshold) { next } # skip oligos which don't meet quality threshold
+  if (genome_loc < 1) { next } # skip oligos which don't map to genome
+  cur_nm <- Vals[[1]][1]
+  cur_seq <- gsub("^frag_(.+)_\\d+$", "\\1", cur_nm, perl = TRUE)
+  cur_loc <- gsub("^frag_.+_(\\d+)$", "\\1", cur_nm, perl = TRUE)
+  SeqHits <- rbind(SeqHits, data.table(
+    Seq = cur_seq,
+    Seq_Loc = as.numeric(cur_loc),
+    Hit_Loc = paste0("chr", genome_chr, ":", genome_loc)
+  ))
+}
+# Convert hits into start/stop regions ####
+Mask_Regions <- data.table()
+for (vec_seq_nm in unique(SeqHits$Seq)) {
+  vec_seq_hits <- SeqHits %>% 
+    filter(Seq==vec_seq_nm) %>% 
+    arrange(Seq_Loc)
+  hit_start <- min(vec_seq_hits$Seq_Loc)
+  prev_pos <- hit_start-1
+  read_coverage <- list()
+  for (i in 1:nrow(vec_seq_hits)) {
+    curr_pos <- vec_seq_hits[i,]$Seq_Loc
+    for (j in curr_pos:(curr_pos+oligo_size)) {
+      read_coverage <- c(read_coverage, j)
+    }
+  }
+  read_coverage <- sort(unique(unlist(read_coverage)))
+  start_zone <- read_coverage[1]
+  end_zone <- read_coverage[1]
+  for (i in 2:length(read_coverage)) {
+    loc <- read_coverage[i]
+    if (loc == end_zone+1) { end_zone = loc }
+    else {
+      Mask_Regions <- rbind(Mask_Regions, data.table(Query=vec_seq_nm, Start=start_zone, End=end_zone))
+      start_zone <- read_coverage[i]
+      end_zone <- read_coverage[i]
+    }
+    if (i == length(read_coverage) & start_zone!=end_zone) {
+      Mask_Regions <- rbind(Mask_Regions, data.table(Query=vec_seq_nm, Start=start_zone, End=loc))
+    }
+  }
+}
+# Clean-up
+file.remove(frags_tfa_file)
+file.remove(bwa_res_file)
+
+print(Mask_Regions)
+write_tsv(Mask_Regions, "Mask_Regions.txt")
+
+
+```
+
+## Hardmasking regions from aav_nofxn
+```{bash}
+parent=/path-to-base/insert_muta/aav/aav.nofxn.hardmask/
+
+mkdir -p ${parent}
+
+cd ${parent}
+
+# to create aav_nofxn_hardmask.fa
+
+# Indexing with bwa and samtools
+/path-to-program/bwa-0.7.17/bwa index ${parent}/aav_nofxn_hardmask.fa
+
+my_stools=/path-to-program/samtools-1.9/samtools
+
+$my_stools faidx \
+${parent}/aav_nofxn_hardmask.fa
+
+
+```
